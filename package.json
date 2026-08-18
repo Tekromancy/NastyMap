@@ -5,7 +5,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "pnpm --filter nastymap-example dev",
+    "build": "pnpm --filter nastymap-example build",
+    "start": "pnpm --filter nastymap-example start",
+    "test": "pnpm --filter nastymap exec vitest run"
   },
   "keywords": [],
   "author": "",

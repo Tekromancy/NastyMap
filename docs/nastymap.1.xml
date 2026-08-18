@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.5//EN"
+  "http://www.oasis-open.org/docbook/xml/4.5/docbookx.dtd">
+<refentry id="nastymap">
+  <refentryinfo>
+    <date>2026-08-18</date>
+    <productname>NastyMap</productname>
+    <title>NastyMap Reference Guide</title>
+  </refentryinfo>
+
+  <refmeta>
+    <refentrytitle>nastymap</refentrytitle>
+    <manvolnum>1</manvolnum>
+    <refmiscinfo class="source">NastyMap Project</refmiscinfo>
+    <refmiscinfo class="manual">NastyMap User Manual</refmiscinfo>
+  </refmeta>
+
+  <refnamediv>
+    <refname>nastymap</refname>
+    <refpurpose>Network Mapper Graphical Topology, GeoIP, and Security Diff Display</refpurpose>
+  </refnamediv>
+
+  <!-- SYNOPSIS -->
+  <refsynopsisdiv id="nastymap-synopsis">
+    <cmdsynopsis>
+      <command>nastymap</command>
+      <arg choice="opt"><replaceable>OPTIONS</replaceable></arg>
+      <arg choice="opt"><replaceable>SCAN_OUTPUT.xml</replaceable></arg>
+    </cmdsynopsis>
+  </refsynopsisdiv>
+
+  <!-- DESCRIPTION -->
+  <refsect1 id="nastymap-description">
+    <title>DESCRIPTION</title>
+    <para>
+      <command>NastyMap</command> is an interactive network topology visualization,
+      geolocation mapping, and security comparison tool for Nmap XML output. It translates
+      Nmap port scans, OS detection, service versioning, and traceroute hops into aesthetic,
+      high-performance 2D dynamic physics graphs, hierarchical route trees, concentric radial
+      diagrams, and global GeoIP vector maps.
+    </para>
+    <para>
+      NastyMap operates in both an interactive web/desktop GUI mode and a non-interactive
+      headless command-line export mode suitable for automated security reports, CI/CD pipelines,
+      and web dashboards.
+    </para>
+  </refsect1>
+
+  <!-- OPTIONS -->
+  <refsect1 id="nastymap-options">
+    <title>OPTIONS</title>
+    <variablelist>
+      <varlistentry>
+        <term><option>-i</option>, <option>--input</option> <replaceable>file.xml</replaceable></term>
+        <listitem>
+          <para>Load and parse the specified Nmap XML scan output file.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--diff</option> <replaceable>baseline.xml</replaceable> <replaceable>current.xml</replaceable></term>
+        <listitem>
+          <para>
+            Perform a visual security comparison between two Nmap XML scans, highlighting
+            newly discovered hosts, removed nodes, opened ports/backdoors, and service changes.
+          </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--layout</option> <replaceable>force|traceroute|radial|subnet|circular</replaceable></term>
+        <listitem>
+          <para>
+            Select the default network topology layout algorithm. Defaults to
+            <literal>force</literal>.
+          </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--export-svg</option> <replaceable>output.svg</replaceable></term>
+        <listitem>
+          <para>Render the network topology graph to a vector SVG image and exit.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--export-png</option> <replaceable>output.png</replaceable></term>
+        <listitem>
+          <para>Render the network topology graph to a high-resolution PNG image and exit.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--report-html</option> <replaceable>report.html</replaceable></term>
+        <listitem>
+          <para>
+            Generate a complete, self-contained HTML vulnerability and topology report
+            with embedded interactive SVG map and host inventory.
+          </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--filter-port</option> <replaceable>ports</replaceable></term>
+        <listitem>
+          <para>Filter graph visualization to hosts with specified open ports (e.g. 22,80,443).</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>--filter-os</option> <replaceable>family</replaceable></term>
+        <listitem>
+          <para>Filter graph visualization to hosts matching the specified OS family (e.g. Linux, Windows, Cisco).</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-h</option>, <option>--help</option></term>
+        <listitem>
+          <para>Print a summary of command-line usage and exit.</para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><option>-V</option>, <option>--version</option></term>
+        <listitem>
+          <para>Display NastyMap version information.</para>
+        </listitem>
+      </varlistentry>
+    </variablelist>
+  </refsect1>
+
+  <!-- TRACEROUTE INTEGRATION -->
+  <refsect1 id="nastymap-traceroute">
+    <title>PARALLEL TRACEROUTE AND TOPOLOGY</title>
+    <para>
+      NastyMap leverages Nmap parallel traceroute data (<option>--traceroute</option>) to
+      reconstruct intermediate router hops and latency metrics. Intermediate gateway nodes
+      are deduplicated across targets, creating a unified topological graph of the network
+      backbone from the scanner origin to end systems.
+    </para>
+  </refsect1>
+
+  <!-- GEOLOCATION -->
+  <refsect1 id="nastymap-geolocation">
+    <title>GEOLOCATION MAPPING</title>
+    <para>
+      Public IP addresses discovered during perimeter scans are geocoded and displayed on
+      an interactive vector world map with flight paths illustrating latency and packet hops.
+    </para>
+  </refsect1>
+
+  <!-- AUTHORS & COPYRIGHT -->
+  <refsect1 id="nastymap-authors">
+    <title>AUTHORS</title>
+    <para>
+      NastyMap was created for the Nmap Security Scanner community.
+      Based on the Nmap Graphical Display GSoC initiative.
+    </para>
+  </refsect1>
+</refentry>
