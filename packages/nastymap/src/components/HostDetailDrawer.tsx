@@ -67,10 +67,15 @@ export function HostDetailDrawer({
   };
 
   return (
-    <aside
-      aria-label="Host Inspector"
-      className="fixed inset-y-0 right-0 w-full sm:w-[480px] bg-zinc-950/95 backdrop-blur-xl border-l border-zinc-800/80 shadow-2xl z-50 flex flex-col text-zinc-100 font-sans transition-all duration-300 ease-in-out"
+    <div
+      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6"
+      onClick={onClose}
     >
+      <aside
+        aria-label="Host Inspector"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-[500px] max-h-[85vh] bg-zinc-950/95 backdrop-blur-2xl border border-zinc-800 shadow-2xl rounded-2xl flex flex-col text-zinc-100 font-sans overflow-hidden transition-all duration-200"
+      >
       {/* Header */}
       <div className="p-5 border-b border-zinc-800 flex items-start justify-between bg-zinc-900/50">
         <div className="flex items-center gap-3.5">
@@ -380,5 +385,6 @@ export function HostDetailDrawer({
         )}
       </div>
     </aside>
+    </div>
   );
 }

@@ -40,9 +40,11 @@ NastyMap/
 │       │   └── data/         # Sample scans (Enterprise, Global GeoIP, Breach Diff)
 │       └── test/             # Vitest automated test suite
 ├── apps/
-│   └── nastymap-example/     # Flagship Next.js 16 + React 19 App Router showcase
-│       ├── app/              # Cyber-ops UI, dark/light theme, full interactive views
-│       └── components/       # Live scanner simulator & interactive developer playground
+│   ├── nastymap-example/     # Flagship Next.js 16 + React 19 App Router web showcase
+│   │   ├── app/              # Cyber-ops UI, dark/light theme, full interactive views
+│   │   └── components/       # Live scanner simulator & interactive developer playground
+│   └── nastymap-ink-example/ # Interactive Terminal User Interface (TUI) built with Ink CLI
+│       └── src/              # ASCII topology tree, terminal world map, diff, & host inspector
 ├── docs/
 │   └── nastymap.1.xml        # DocBook XML man page (compatible with nroff & HTML)
 └── installer/
@@ -58,11 +60,18 @@ NastyMap/
 pnpm install
 ```
 
-### 2. Run the Flagship Example App
+### 2. Run the Flagship Next.js Web App
 ```bash
 pnpm dev
 ```
 Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### 3. Run the Interactive Ink CLI Terminal App
+```bash
+pnpm cli
+# Or pass a custom Nmap XML scan file
+pnpm --filter nastymap-ink-example start scan.xml
+```
 
 ### 3. Run Automated Tests
 ```bash

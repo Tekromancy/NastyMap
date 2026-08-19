@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   NmapTopologyView,
   NmapGeoMap,
@@ -34,6 +34,12 @@ import {
 } from 'lucide-react';
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   // Current active scan
   const [currentScan, setCurrentScan] = useState<NmapRun>(() => {
     return parseNmapXml(SAMPLE_SCANS.enterprise.xml);
@@ -100,6 +106,17 @@ export default function Home() {
     (acc, h) => acc + h.ports.filter((p) => p.state === 'open').length,
     0
   );
+
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-[#050811] text-zinc-100 font-sans flex items-center justify-center">
+        <div className="flex items-center gap-3 text-sky-400 font-mono text-xs">
+          <div className="w-5 h-5 border-2 border-sky-400 border-t-transparent rounded-full animate-spin" />
+          <span>Initializing NastyMap Security Console...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#050811] text-zinc-100 font-sans flex flex-col selection:bg-sky-500 selection:text-white">

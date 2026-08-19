@@ -1,0 +1,28 @@
+{
+  "name": "nastymap-ink-example",
+  "version": "1.0.0",
+  "description": "Interactive Terminal UI (TUI) for NastyMap Nmap scan visualization built with Ink and React",
+  "main": "./src/cli.tsx",
+  "bin": {
+    "nastymap-cli": "./src/cli.tsx"
+  },
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/cli.tsx",
+    "dev": "tsx src/cli.tsx",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "ink": "^5.1.0",
+    "meow": "^13.2.0",
+    "nastymap": "workspace:*",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/react": "^18.3.18",
+    "tsx": "^4.19.3",
+    "typescript": "^5.9.3"
+  }
+}

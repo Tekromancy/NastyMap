@@ -96,8 +96,8 @@ export function generateTopology(scan: NmapRun, options: TopologyOptions = {}): 
       subnet,
       hostRef: host,
       geolocation: host.geolocation,
-      x: width / 2 + (Math.random() - 0.5) * 200,
-      y: height / 2 + (Math.random() - 0.5) * 200,
+      x: width / 2,
+      y: height / 2,
       radius: Math.min(32, Math.max(16, 16 + openPorts.length * 1.5)),
       color: getOsColor(host.osFamily),
     };
@@ -135,8 +135,8 @@ export function generateTopology(scan: NmapRun, options: TopologyOptions = {}): 
               latencyMs: hop.rtt,
               hopsAway: hop.ttl,
               subnet: hopSubnet,
-              x: width / 2 + (Math.random() - 0.5) * 150,
-              y: height / 2 + (Math.random() - 0.5) * 150,
+              x: width / 2,
+              y: height / 2,
               radius: 14,
               color: '#eab308', // Amber/yellow
             };

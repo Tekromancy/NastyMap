@@ -6,7 +6,8 @@
   "main": "index.js",
   "scripts": {
     "dev": "pnpm --filter nastymap-example dev",
-    "build": "pnpm --filter nastymap-example build",
+    "cli": "pnpm --filter nastymap-ink-example start",
+    "build": "pnpm --filter nastymap-example build && pnpm --filter nastymap-ink-example build",
     "start": "pnpm --filter nastymap-example start",
     "test": "pnpm --filter nastymap exec vitest run"
   },

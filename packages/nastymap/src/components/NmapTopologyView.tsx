@@ -733,21 +733,23 @@ export function NmapTopologyView({
         </svg>
       </div>
 
-      {/* Host Inspector Drawer */}
-      <HostDetailDrawer
-        node={selectedNode}
-        onClose={() => setSelectedNode(null)}
-        onUpdateComment={(hostId, comment) => {
-          if (selectedNode && selectedNode.hostRef) {
-            selectedNode.hostRef.comments = comment;
-          }
-        }}
-        onUpdateTags={(hostId, tags) => {
-          if (selectedNode && selectedNode.hostRef) {
-            selectedNode.hostRef.tags = tags;
-          }
-        }}
-      />
+      {/* Host Inspector Drawer (renders if not handled externally) */}
+      {!onSelectHost && (
+        <HostDetailDrawer
+          node={selectedNode}
+          onClose={() => setSelectedNode(null)}
+          onUpdateComment={(hostId, comment) => {
+            if (selectedNode && selectedNode.hostRef) {
+              selectedNode.hostRef.comments = comment;
+            }
+          }}
+          onUpdateTags={(hostId, tags) => {
+            if (selectedNode && selectedNode.hostRef) {
+              selectedNode.hostRef.tags = tags;
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
