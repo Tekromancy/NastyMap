@@ -18,6 +18,8 @@ If Nmap is called the **Network Mapper**, it should generate a stunning map! Nas
 - **Live Scan Runner Simulation** (Streaming discovery progress bar & real-time topology updates)
 - **Multi-Format Export** (SVG vector, high-res PNG, and standalone HTML reports)
 
+This was inspired in response to a [proposal](https://nmap.org/soc/NmapDiag.html) for google summer of code. 
+
 ---
 
 ## 📁 Repository Structure
