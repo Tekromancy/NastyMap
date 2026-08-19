@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import type { NmapHost, NmapRun } from '../types/nmap';
+import type { NmapHost, NmapRun, HostAction } from '../types/nmap';
 import { getHostIcon } from '../icons/index';
 import {
   Search,
@@ -10,17 +10,26 @@ import {
   Activity,
   Server,
   ChevronRight,
+  Zap,
 } from 'lucide-react';
 
 export interface HostTableProps {
   scan: NmapRun;
   onSelectHost?: (host: NmapHost) => void;
+  onUpdateHost?: (hostId: string, updater: (prev: NmapHost) => NmapHost | Partial<NmapHost>) => void;
+  customActions?: HostAction[];
   className?: string;
 }
 
 type SortField = 'ip' | 'hostname' | 'status' | 'os' | 'ports' | 'latency';
 
-export function HostTable({ scan, onSelectHost, className = '' }: HostTableProps) {
+export function HostTable({
+  scan,
+  onSelectHost,
+  onUpdateHost,
+  customActions = [],
+  className = '',
+}: HostTableProps) {
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState<SortField>('ip');
   const [sortAsc, setSortAsc] = useState(true);
@@ -261,16 +270,46 @@ export function HostTable({ scan, onSelectHost, className = '' }: HostTableProps
                     {host.latencyMs !== undefined ? `${host.latencyMs} ms` : '-'}
                   </td>
                   <td className="py-3 px-4 text-right">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectHost && onSelectHost(host);
-                      }}
-                      className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
-                      title="Inspect Host"
-                    >
-                      <ChevronRight size={16} />
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      {customActions.map((action) => {
+                        if (action.isVisible && !action.isVisible(host)) return null;
+                        const disabled = action.isDisabled && action.isDisabled(host);
+                        return (
+                          <button
+                            key={action.id}
+                            disabled={disabled}
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              const res = await action.onClick(host, {
+                                updateHost: (updater) => {
+                                  if (onUpdateHost) onUpdateHost(host.id, updater);
+                                },
+                                scan,
+                              });
+                              if (res && onUpdateHost) {
+                                onUpdateHost(host.id, () => res);
+                              }
+                            }}
+                            className={`p-1.5 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors ${
+                              disabled ? 'opacity-40 cursor-not-allowed' : ''
+                            }`}
+                            title={action.tooltip || action.label}
+                          >
+                            {action.icon || <Zap size={14} />}
+                          </button>
+                        );
+                      })}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectHost && onSelectHost(host);
+                        }}
+                        className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+                        title="Inspect Host"
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );

@@ -7,6 +7,8 @@ import type {
   TopologyGraph,
   TopologyLayoutType,
   TopologyNode,
+  HostAction,
+  CustomDrawerTab,
 } from '../types/nmap';
 import {
   generateTopology,
@@ -36,12 +38,18 @@ import {
   Tag,
   Radio,
   FileText,
+  Zap,
+  Info,
 } from 'lucide-react';
 
 export interface NmapTopologyViewProps {
   scan: NmapRun;
   initialLayout?: TopologyLayoutType;
   onSelectHost?: (host: NmapHost) => void;
+  onUpdateHost?: (hostId: string, updater: (prev: NmapHost) => NmapHost | Partial<NmapHost>) => void;
+  onNodeContextMenu?: (node: TopologyNode, e: React.MouseEvent) => void;
+  customActions?: HostAction[];
+  customTabs?: CustomDrawerTab[];
   className?: string;
 }
 
@@ -49,6 +57,10 @@ export function NmapTopologyView({
   scan,
   initialLayout = 'force',
   onSelectHost,
+  onUpdateHost,
+  onNodeContextMenu,
+  customActions = [],
+  customTabs = [],
   className = '',
 }: NmapTopologyViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -190,12 +202,67 @@ export function NmapTopologyView({
     setPan({ x: 0, y: 0 });
   };
 
+  // Context Menu State
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: TopologyNode } | null>(null);
+
+  // Keyboard shortcut listener for selected node on canvas
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+      if (!selectedNode || !selectedNode.hostRef) return;
+
+      for (const action of customActions) {
+        if (!action.shortcut) continue;
+        const s = action.shortcut.toLowerCase();
+        const matches =
+          e.key.toLowerCase() === s ||
+          (e.shiftKey && `shift+${e.key.toLowerCase()}` === s) ||
+          (e.ctrlKey && `ctrl+${e.key.toLowerCase()}` === s);
+
+        if (matches) {
+          e.preventDefault();
+          const host = selectedNode.hostRef;
+          action.onClick(host, {
+            node: selectedNode,
+            updateHost: (updater) => {
+              if (onUpdateHost) onUpdateHost(host.id, updater);
+            },
+            scan,
+          });
+          break;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedNode, customActions, onUpdateHost, scan]);
+
   // Node Selection
   const handleNodeClick = (node: TopologyNode, e: React.MouseEvent) => {
     e.stopPropagation();
+    setContextMenu(null);
     setSelectedNode(node);
     if (onSelectHost && node.hostRef) {
       onSelectHost(node.hostRef);
+    }
+  };
+
+  const handleNodeContextMenu = (node: TopologyNode, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedNode(node);
+    if (onNodeContextMenu) {
+      onNodeContextMenu(node, e);
+    }
+    const bounds = containerRef.current?.getBoundingClientRect();
+    if (bounds) {
+      setContextMenu({
+        x: e.clientX - bounds.left,
+        y: e.clientY - bounds.top,
+        node,
+      });
     }
   };
 
@@ -631,6 +698,7 @@ export function NmapTopologyView({
                   opacity={isVisible ? 1 : 0.15}
                   className="cursor-pointer group"
                   onClick={(e) => handleNodeClick(node, e)}
+                  onContextMenu={(e) => handleNodeContextMenu(node, e)}
                   onMouseDown={(e) => {
                     e.stopPropagation();
                     setDraggedNodeId(node.id);
@@ -648,6 +716,18 @@ export function NmapTopologyView({
                     />
                   )}
 
+                  {/* Quarantine / Incident Alert Halo */}
+                  {(node.hostRef?.isQuarantined || node.isQuarantined) && (
+                    <circle
+                      r={node.radius + 11}
+                      fill="none"
+                      stroke="#f59e0b"
+                      strokeWidth="2.5"
+                      strokeDasharray="6,3"
+                      className="animate-pulse"
+                    />
+                  )}
+
                   {/* Outer Status Ring */}
                   <circle
                     r={node.radius}
@@ -655,6 +735,8 @@ export function NmapTopologyView({
                     stroke={
                       isScanner
                         ? '#a855f7'
+                        : (node.hostRef?.isQuarantined || node.isQuarantined)
+                        ? '#f59e0b'
                         : node.status === 'up'
                         ? '#22c55e'
                         : '#ef4444'
@@ -731,6 +813,74 @@ export function NmapTopologyView({
             })}
           </g>
         </svg>
+
+        {/* Node Right-Click Context Menu */}
+        {contextMenu && (
+          <div
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            className="absolute z-50 bg-zinc-950/95 backdrop-blur-xl border border-zinc-800 shadow-2xl rounded-xl p-1.5 min-w-[220px] text-xs font-sans animate-fade-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-2.5 py-1.5 border-b border-zinc-800 text-[11px] font-mono text-zinc-400 flex items-center justify-between">
+              <span className="font-bold text-white truncate max-w-[120px]">{contextMenu.node.label}</span>
+              <span className="text-[10px] text-zinc-500">{contextMenu.node.ip}</span>
+            </div>
+
+            <div className="py-1 space-y-0.5">
+              <button
+                onClick={() => {
+                  setSelectedNode(contextMenu.node);
+                  if (onSelectHost && contextMenu.node.hostRef) onSelectHost(contextMenu.node.hostRef);
+                  setContextMenu(null);
+                }}
+                className="w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-zinc-800 text-zinc-200 flex items-center gap-2 transition-colors"
+              >
+                <Info size={13} className="text-sky-400" />
+                <span>Inspect Host Details</span>
+              </button>
+
+              {customActions.map((action) => {
+                const host = contextMenu.node.hostRef;
+                if (!host) return null;
+                if (action.isVisible && !action.isVisible(host)) return null;
+                const disabled = action.isDisabled && action.isDisabled(host);
+
+                return (
+                  <button
+                    key={action.id}
+                    disabled={disabled}
+                    onClick={async () => {
+                      setContextMenu(null);
+                      const res = await action.onClick(host, {
+                        node: contextMenu.node,
+                        updateHost: (updater) => {
+                          if (onUpdateHost) onUpdateHost(host.id, updater);
+                        },
+                        scan,
+                      });
+                      if (res && onUpdateHost) {
+                        onUpdateHost(host.id, () => res);
+                      }
+                    }}
+                    className={`w-full text-left px-2.5 py-1.5 rounded-lg hover:bg-zinc-800 text-zinc-200 flex items-center justify-between transition-colors ${
+                      disabled ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {action.icon || <Zap size={13} className="text-amber-400" />}
+                      <span>{action.label}</span>
+                    </div>
+                    {action.shortcut && (
+                      <kbd className="px-1 py-0.5 bg-black/40 font-mono text-[9px] rounded text-zinc-400 border border-zinc-800">
+                        {action.shortcut.toUpperCase()}
+                      </kbd>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Host Inspector Drawer (renders if not handled externally) */}
@@ -738,6 +888,9 @@ export function NmapTopologyView({
         <HostDetailDrawer
           node={selectedNode}
           onClose={() => setSelectedNode(null)}
+          onUpdateHost={onUpdateHost}
+          customActions={customActions}
+          customTabs={customTabs}
           onUpdateComment={(hostId, comment) => {
             if (selectedNode && selectedNode.hostRef) {
               selectedNode.hostRef.comments = comment;

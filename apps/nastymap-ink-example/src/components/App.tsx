@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import type { NmapHost, NmapRun } from 'nastymap';
-import { parseNmapXml, SAMPLE_SCANS } from 'nastymap';
+import { parseNmapXml, updateHostInScan, SAMPLE_SCANS } from 'nastymap';
 import { Header } from './Header';
 import { TabBar, TabId } from './TabBar';
 import { TopologyView } from './TopologyView';
@@ -34,6 +34,18 @@ export function App({
   const [activeScanLabel, setActiveScanLabel] = useState<string>(initialScanLabel);
   const [activeTab, setActiveTab] = useState<TabId>(initialTab);
   const [selectedHost, setSelectedHost] = useState<NmapHost | null>(null);
+
+  const handleUpdateHost = (hostId: string, updater: (prev: NmapHost) => NmapHost | Partial<NmapHost>) => {
+    setCurrentScan((prev) => {
+      const updated = updateHostInScan(prev, hostId, updater);
+      setSelectedHost((curr) => {
+        if (!curr) return null;
+        const matching = updated.hosts.find((h) => h.id === curr.id || h.ipv4 === curr.ipv4);
+        return matching || curr;
+      });
+      return updated;
+    });
+  };
 
   useInput((input, key) => {
     if (input === 'q' && !selectedHost) {
@@ -78,7 +90,11 @@ export function App({
 
       {/* View Content */}
       {selectedHost ? (
-        <HostInspector host={selectedHost} onBack={() => setSelectedHost(null)} />
+        <HostInspector
+          host={selectedHost}
+          onBack={() => setSelectedHost(null)}
+          onUpdateHost={handleUpdateHost}
+        />
       ) : (
         <>
           {activeTab === 'topology' && (

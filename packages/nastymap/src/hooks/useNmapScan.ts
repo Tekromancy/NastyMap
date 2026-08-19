@@ -3,6 +3,12 @@ import type { NmapHost, NmapRun, TopologyGraph, TopologyLayoutType } from '../ty
 import { parseNmapXml } from '../parser/nmap-xml-parser';
 import { SAMPLE_SCANS } from '../data/sample-scans';
 import { generateTopology } from '../topology/topology-engine';
+import {
+  updateHostInScan,
+  mergeScanResults,
+  addHostToScan,
+  removeHostFromScan,
+} from '../mutation/scan-mutator';
 
 export interface UseNmapScanOptions {
   initialXml?: string;
@@ -42,6 +48,26 @@ export function useNmapScan(options: UseNmapScanOptions = {}) {
     }
   }, [loadXml]);
 
+  const updateHost = useCallback(
+    (hostIdOrIp: string, updater: (prev: NmapHost) => NmapHost | Partial<NmapHost>) => {
+      setScan((prevScan) => updateHostInScan(prevScan, hostIdOrIp, updater));
+    },
+    []
+  );
+
+  const mergeScan = useCallback((newScanOrXml: NmapRun | string) => {
+    const newScan = typeof newScanOrXml === 'string' ? parseNmapXml(newScanOrXml) : newScanOrXml;
+    setScan((prevScan) => mergeScanResults(prevScan, newScan));
+  }, []);
+
+  const addHost = useCallback((host: NmapHost) => {
+    setScan((prevScan) => addHostToScan(prevScan, host));
+  }, []);
+
+  const removeHost = useCallback((hostIdOrIp: string) => {
+    setScan((prevScan) => removeHostFromScan(prevScan, hostIdOrIp));
+  }, []);
+
   const selectedHost: NmapHost | undefined = useMemo(() => {
     if (!selectedHostId) return undefined;
     return scan.hosts.find((h) => (h.ipv4 || h.ipv6 || h.id) === selectedHostId);
@@ -53,6 +79,7 @@ export function useNmapScan(options: UseNmapScanOptions = {}) {
 
   return {
     scan,
+    setScan,
     graph,
     error,
     selectedHostId,
@@ -60,5 +87,9 @@ export function useNmapScan(options: UseNmapScanOptions = {}) {
     setSelectedHostId,
     loadXml,
     loadSample,
+    updateHost,
+    mergeScan,
+    addHost,
+    removeHost,
   };
 }

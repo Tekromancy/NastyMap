@@ -138,6 +138,9 @@ export interface NmapHost {
   deviceType?: string;
   openPortCount?: number;
   latencyMs?: number;
+  customData?: Record<string, any>;
+  isFlagged?: boolean;
+  isQuarantined?: boolean;
 }
 
 export interface NmapScanInfo {
@@ -150,10 +153,10 @@ export interface NmapScanInfo {
 export interface NmapRunStats {
   finished: {
     time: number;
-    timestr: string;
-    elapsed: number;
-    summary: string;
-    exit: string;
+    timestr?: string;
+    summary?: string;
+    elapsed?: number;
+    exit?: string;
   };
   hosts: {
     up: number;
@@ -173,11 +176,11 @@ export interface NmapRun {
   verbose?: { level: number };
   debugging?: { level: number };
   hosts: NmapHost[];
-  runstats?: NmapRunStats;
+  runstats: NmapRunStats;
   rawXml?: string;
 }
 
-// Topology Graph Types
+// Topology & Visualization Types
 export type TopologyLayoutType = 'force' | 'traceroute' | 'radial' | 'subnet' | 'circular';
 
 export interface TopologyNode {
@@ -185,8 +188,8 @@ export interface TopologyNode {
   label: string;
   ip: string;
   hostname?: string;
-  nodeType: 'scanner' | 'gateway' | 'router' | 'host' | 'intermediate_hop';
-  status: 'up' | 'down' | 'unknown';
+  nodeType: 'scanner' | 'intermediate_hop' | 'gateway' | 'router' | 'host' | 'switch';
+  status: 'up' | 'down' | 'unknown' | 'filtered';
   osFamily: string;
   osName: string;
   deviceType: string;
@@ -194,7 +197,7 @@ export interface TopologyNode {
   openPortDetails: NmapPort[];
   latencyMs?: number;
   hopsAway: number;
-  subnet: string;
+  subnet?: string;
   hostRef?: NmapHost;
   geolocation?: NmapGeoLocation;
   // Graph simulation coordinates
@@ -206,6 +209,9 @@ export interface TopologyNode {
   color?: string;
   icon?: string;
   isPinned?: boolean;
+  customData?: Record<string, any>;
+  isFlagged?: boolean;
+  isQuarantined?: boolean;
 }
 
 export interface TopologyLink {
@@ -293,3 +299,40 @@ export interface DetailLevelSettings {
   showSubnetHulls: boolean;
   nodeSize: 'compact' | 'standard' | 'large';
 }
+
+// Extensibility Types
+export interface HostActionContext {
+  node?: TopologyNode;
+  updateHost: (updater: (prev: NmapHost) => NmapHost | Partial<NmapHost>) => void;
+  notify?: (message: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
+  scan?: NmapRun;
+  closeDrawer?: () => void;
+}
+
+export interface HostAction {
+  id: string;
+  label: string;
+  icon?: any;
+  shortcut?: string; // e.g. 'd', 'Shift+D', 'r', 'q'
+  variant?: 'default' | 'primary' | 'danger' | 'warning' | 'success' | 'outline';
+  tooltip?: string;
+  description?: string;
+  onClick: (
+    host: NmapHost,
+    context: HostActionContext
+  ) => void | Promise<void | Partial<NmapHost> | NmapHost>;
+  isDisabled?: (host: NmapHost) => boolean;
+  isVisible?: (host: NmapHost) => boolean;
+}
+
+export interface CustomDrawerTab {
+  id: string;
+  label: string;
+  icon?: any;
+  badge?: (host: NmapHost) => string | number | undefined;
+  render: (
+    host: NmapHost,
+    updateHost: (updater: (prev: NmapHost) => NmapHost | Partial<NmapHost>) => void
+  ) => any;
+}
+

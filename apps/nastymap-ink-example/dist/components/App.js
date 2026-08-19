@@ -1,7 +1,7 @@
 import { jsx as _jsx, Fragment as _Fragment, jsxs as _jsxs } from "react/jsx-runtime";
 import { useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
-import { parseNmapXml, SAMPLE_SCANS } from 'nastymap';
+import { parseNmapXml, updateHostInScan, SAMPLE_SCANS } from 'nastymap';
 import { Header } from './Header';
 import { TabBar } from './TabBar';
 import { TopologyView } from './TopologyView';
@@ -19,6 +19,18 @@ export function App({ initialScan, initialScanLabel = 'Enterprise Multi-Subnet',
     const [activeScanLabel, setActiveScanLabel] = useState(initialScanLabel);
     const [activeTab, setActiveTab] = useState(initialTab);
     const [selectedHost, setSelectedHost] = useState(null);
+    const handleUpdateHost = (hostId, updater) => {
+        setCurrentScan((prev) => {
+            const updated = updateHostInScan(prev, hostId, updater);
+            setSelectedHost((curr) => {
+                if (!curr)
+                    return null;
+                const matching = updated.hosts.find((h) => h.id === curr.id || h.ipv4 === curr.ipv4);
+                return matching || curr;
+            });
+            return updated;
+        });
+    };
     useInput((input, key) => {
         if (input === 'q' && !selectedHost) {
             exit();
@@ -59,7 +71,7 @@ export function App({ initialScan, initialScanLabel = 'Enterprise Multi-Subnet',
             }
         }
     });
-    return (_jsxs(Box, { flexDirection: "column", padding: 1, children: [_jsx(Header, { scan: currentScan, activeScanLabel: activeScanLabel }), _jsx(TabBar, { activeTab: activeTab }), selectedHost ? (_jsx(HostInspector, { host: selectedHost, onBack: () => setSelectedHost(null) })) : (_jsxs(_Fragment, { children: [activeTab === 'topology' && (_jsx(TopologyView, { scan: currentScan, onSelectHost: (host) => setSelectedHost(host) })), activeTab === 'geo' && (_jsx(WorldMapView, { scan: currentScan, onSelectHost: (host) => setSelectedHost(host) })), activeTab === 'diff' && _jsx(DiffView, { scanA: diffScanA, scanB: diffScanB }), activeTab === 'hosts' && (_jsx(HostDirectoryView, { scan: currentScan, onSelectHost: (host) => setSelectedHost(host) })), activeTab === 'stats' && _jsx(StatsView, { scan: currentScan }), activeTab === 'live' && (_jsx(LiveSimulatorView, { onScanCompleted: (newScan) => {
+    return (_jsxs(Box, { flexDirection: "column", padding: 1, children: [_jsx(Header, { scan: currentScan, activeScanLabel: activeScanLabel }), _jsx(TabBar, { activeTab: activeTab }), selectedHost ? (_jsx(HostInspector, { host: selectedHost, onBack: () => setSelectedHost(null), onUpdateHost: handleUpdateHost })) : (_jsxs(_Fragment, { children: [activeTab === 'topology' && (_jsx(TopologyView, { scan: currentScan, onSelectHost: (host) => setSelectedHost(host) })), activeTab === 'geo' && (_jsx(WorldMapView, { scan: currentScan, onSelectHost: (host) => setSelectedHost(host) })), activeTab === 'diff' && _jsx(DiffView, { scanA: diffScanA, scanB: diffScanB }), activeTab === 'hosts' && (_jsx(HostDirectoryView, { scan: currentScan, onSelectHost: (host) => setSelectedHost(host) })), activeTab === 'stats' && _jsx(StatsView, { scan: currentScan }), activeTab === 'live' && (_jsx(LiveSimulatorView, { onScanCompleted: (newScan) => {
                             setCurrentScan(newScan);
                             setActiveScanLabel('Live Discovered Scan');
                             setActiveTab('topology');
