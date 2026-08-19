@@ -1,6 +1,6 @@
 {
   "name": "nastymap",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "High-performance interactive React visualization and parsing library for Nmap XML scan outputs, network topology graphs, GeoIP world mapping, and security diffing.",
   "author": "NastyMap Team",
   "license": "MIT",
