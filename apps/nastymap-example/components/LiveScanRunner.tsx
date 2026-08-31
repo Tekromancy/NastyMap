@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import type { NmapHost, NmapRun } from 'nastymap';
 import { parseNmapXml, ENTERPRISE_NETWORK_XML, GLOBAL_PERIMETER_XML } from 'nastymap';
 import {
@@ -13,18 +13,15 @@ import {
   Sparkles,
   RefreshCw,
   AlertTriangle,
-  AlertOctagon,
   Radio,
-  Wifi,
-  Zap,
   X,
   Info,
   Check,
   ShieldAlert,
   Network,
   Laptop,
-  Globe,
-  Sliders,
+  Filter,
+  Zap,
 } from 'lucide-react';
 
 export interface NetworkInterfaceInfo {
@@ -74,6 +71,10 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
   const [interfaces, setInterfaces] = useState<NetworkInterfaceInfo[]>([]);
   const [isLoadingInterfaces, setIsLoadingInterfaces] = useState<boolean>(false);
   const [selectedInterface, setSelectedInterface] = useState<NetworkInterfaceInfo | null>(null);
+
+  // Filter option: Exclude zero-port hosts (for port scans) vs keep ping-responsive
+  const [excludeZeroPortHosts, setExcludeZeroPortHosts] = useState<boolean>(true);
+  const [streamFilter, setStreamFilter] = useState<'open_ports' | 'ping_up' | 'all'>('all');
 
   useEffect(() => {
     if (logContainerRef.current) {
@@ -130,7 +131,6 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
     setShowWarningModal(false);
     setScanMode('live');
 
-    // Default to the first detected subnet if available, otherwise scanme.nmap.org
     const primaryNet = interfaces.find((i) => !i.isInternal);
     if (primaryNet) {
       setCommand(`nmap -sV -F ${primaryNet.networkCidr}`);
@@ -187,14 +187,28 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
         clearInterval(interval);
         setProgress(100);
         setCurrentPhase('Scan Completed Successfully');
+
+        const isPingScan = command.includes('-sn') || command.includes('-sP');
+        const upHosts = fullScan.hosts.filter((h) => h.status.state === 'up');
+        const hostsWithOpenPorts = fullScan.hosts.filter((h) => h.ports.some((p) => p.state === 'open'));
+
+        let hostsToReturn = fullScan.hosts;
+        if (isPingScan) {
+          hostsToReturn = upHosts.length > 0 ? upHosts : fullScan.hosts;
+        } else if (excludeZeroPortHosts && hostsWithOpenPorts.length > 0) {
+          hostsToReturn = hostsWithOpenPorts;
+        }
+
         setStreamedHosts(fullScan.hosts);
         setLogs((prev) => [
           ...prev,
-          `[${new Date().toLocaleTimeString()}] Nmap done: ${totalHosts} IP addresses (${totalHosts} hosts up) scanned in 4.25 seconds.`,
-          `[${new Date().toLocaleTimeString()}] Topology and Geolocation map updated!`,
+          `[${new Date().toLocaleTimeString()}] Nmap done: ${totalHosts} IP addresses scanned in 4.25 seconds.`,
+          `[${new Date().toLocaleTimeString()}] Topology updated: ${hostsToReturn.length} host(s) mapped (${
+            isPingScan ? `${upHosts.length} responded to ping` : `${hostsWithOpenPorts.length} with open ports`
+          }).`,
         ]);
         setIsRunning(false);
-        onScanCompleted(fullScan, 'simulated', command);
+        onScanCompleted({ ...fullScan, hosts: hostsToReturn }, 'simulated', command);
       }
     }, 900);
   };
@@ -254,9 +268,9 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
               setLogs((prev) => [...prev, event.line]);
 
               const txt = event.line.toLowerCase();
-              if (txt.includes('initiating ping scan') || txt.includes('initiating arp')) {
-                setProgress(30);
-                setCurrentPhase('Host Discovery & Ping Probing...');
+              if (txt.includes('initiating ping scan') || txt.includes('initiating arp') || txt.includes('ping scan')) {
+                setProgress(35);
+                setCurrentPhase('Ping Sweep & Host Discovery Probing...');
               } else if (txt.includes('initiating syn stealth') || txt.includes('initiating connect scan') || txt.includes('scanning')) {
                 setProgress(55);
                 setCurrentPhase('Port Scanning & State Detection...');
@@ -292,12 +306,32 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
         setStreamedHosts(parsedScan.hosts);
         setProgress(100);
         setCurrentPhase('Live Real Scan Completed');
+
+        const isPingScan = command.includes('-sn') || command.includes('-sP');
+        const upHosts = parsedScan.hosts.filter((h) => h.status.state === 'up');
+        const hostsWithOpenPorts = parsedScan.hosts.filter((h) => h.ports.some((p) => p.state === 'open'));
+
+        let hostsToReturn = parsedScan.hosts;
+        let summaryMsg = '';
+
+        if (isPingScan) {
+          hostsToReturn = upHosts.length > 0 ? upHosts : parsedScan.hosts;
+          summaryMsg = `✔ Ping Discovery Complete: ${upHosts.length} host(s) responded to ping probes (state=up).`;
+        } else if (excludeZeroPortHosts && hostsWithOpenPorts.length > 0) {
+          hostsToReturn = hostsWithOpenPorts;
+          const zeroPortCount = parsedScan.hosts.length - hostsWithOpenPorts.length;
+          summaryMsg = `✔ Port Scan Complete: Loaded ${hostsToReturn.length} host(s) with open ports (${zeroPortCount} empty 0-port IPs excluded).`;
+        } else {
+          hostsToReturn = upHosts.length > 0 ? upHosts : parsedScan.hosts;
+          summaryMsg = `✔ Scan Complete: Loaded ${hostsToReturn.length} host(s) (${hostsWithOpenPorts.length} with open ports, ${upHosts.length} responsive to ping).`;
+        }
+
         setLogs((prev) => [
           ...prev,
-          `[${new Date().toLocaleTimeString()}] ✔ Nmap execution finished successfully.`,
-          `[${new Date().toLocaleTimeString()}] Parsed ${parsedScan.hosts.length} live host(s) into NastyMap.`,
+          `[${new Date().toLocaleTimeString()}] ${summaryMsg}`,
+          `[${new Date().toLocaleTimeString()}] Total IP addresses probed: ${parsedScan.hosts.length}.`,
         ]);
-        onScanCompleted(parsedScan, 'live', command);
+        onScanCompleted({ ...parsedScan, hosts: hostsToReturn }, 'live', command);
       } else {
         setProgress(100);
         setCurrentPhase('Scan finished (No XML produced)');
@@ -339,6 +373,27 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
       handleStartSimulatedScan();
     }
   };
+
+  // Filtered streamed hosts for UI
+  const visibleStreamedHosts = useMemo(() => {
+    if (streamFilter === 'open_ports') {
+      const withPorts = streamedHosts.filter((h) => h.ports.some((p) => p.state === 'open'));
+      return withPorts.length > 0 ? withPorts : streamedHosts;
+    }
+    if (streamFilter === 'ping_up') {
+      const upOnly = streamedHosts.filter((h) => h.status.state === 'up');
+      return upOnly.length > 0 ? upOnly : streamedHosts;
+    }
+    return streamedHosts;
+  }, [streamedHosts, streamFilter]);
+
+  const hostsWithPortsCount = useMemo(() => {
+    return streamedHosts.filter((h) => h.ports.some((p) => p.state === 'open')).length;
+  }, [streamedHosts]);
+
+  const hostsUpCount = useMemo(() => {
+    return streamedHosts.filter((h) => h.status.state === 'up').length;
+  }, [streamedHosts]);
 
   return (
     <div className={`p-6 rounded-2xl bg-zinc-950/90 border border-zinc-800/80 space-y-5 ${className}`}>
@@ -467,7 +522,6 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
               {interfaces.map((iface) => {
-                const isSelected = selectedInterface?.name === iface.name;
                 return (
                   <div
                     key={`${iface.name}-${iface.ip}`}
@@ -503,25 +557,25 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
                       <button
                         onClick={() => setCommand(iface.suggestedCommands.fastPortScan)}
                         className="px-2 py-1 rounded bg-zinc-900 hover:bg-sky-600 hover:text-white text-sky-400 text-[10.5px] border border-zinc-800 transition-colors flex items-center gap-1"
-                        title={`Populate: ${iface.suggestedCommands.fastPortScan}`}
+                        title={`Populate Fast Port Scan: ${iface.suggestedCommands.fastPortScan}`}
                       >
                         <Zap size={10} />
-                        <span>Subnet Fast ({iface.networkCidr})</span>
+                        <span>Port Scan ({iface.networkCidr})</span>
                       </button>
 
                       <button
                         onClick={() => setCommand(iface.suggestedCommands.fastPingScan)}
                         className="px-2 py-1 rounded bg-zinc-900 hover:bg-emerald-600 hover:text-white text-emerald-400 text-[10.5px] border border-zinc-800 transition-colors flex items-center gap-1"
-                        title={`Populate: ${iface.suggestedCommands.fastPingScan}`}
+                        title={`Populate Ping Discovery Sweep: ${iface.suggestedCommands.fastPingScan}`}
                       >
                         <Radio size={10} />
-                        <span>Ping Sweep</span>
+                        <span>Ping Sweep (-sn)</span>
                       </button>
 
                       <button
                         onClick={() => setCommand(iface.suggestedCommands.singleHostScan)}
                         className="px-2 py-1 rounded bg-zinc-900 hover:bg-amber-600 hover:text-white text-amber-400 text-[10.5px] border border-zinc-800 transition-colors flex items-center gap-1"
-                        title={`Populate: ${iface.suggestedCommands.singleHostScan}`}
+                        title={`Populate Self Host: ${iface.suggestedCommands.singleHostScan}`}
                       >
                         <Laptop size={10} />
                         <span>Self Host ({iface.ip})</span>
@@ -538,21 +592,77 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
       {/* Target & Command Suggestions (External / Authorized) */}
       {scanMode === 'live' && !isRunning && (
         <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
-          <span className="text-zinc-500 font-semibold">External Authorized:</span>
+          <span className="text-zinc-500 font-semibold">Authorized Presets:</span>
+          <button
+            onClick={() => setCommand('nmap -sn scanme.nmap.org')}
+            className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-emerald-400 border border-zinc-800 transition-colors flex items-center gap-1"
+          >
+            <Radio size={11} />
+            <span>scanme.nmap.org (Ping Sweep)</span>
+          </button>
           <button
             onClick={() => setCommand('nmap -sV -F scanme.nmap.org')}
             className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-sky-400 border border-zinc-800 transition-colors"
           >
-            scanme.nmap.org (Official Testbed)
+            scanme.nmap.org (Port Scan)
           </button>
           <button
-            onClick={() => setCommand('nmap -sT -p 80,443,22 scanme.nmap.org')}
-            className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-purple-400 border border-zinc-800 transition-colors"
+            onClick={() => setCommand('nmap -sn 127.0.0.1')}
+            className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-amber-400 border border-zinc-800 transition-colors"
           >
-            scanme.nmap.org (Common Ports)
+            127.0.0.1 (Ping Localhost)
           </button>
         </div>
       )}
+
+      {/* Scanning Options Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+        <label className="flex items-center gap-2 text-zinc-300 font-medium cursor-pointer select-none bg-zinc-900/60 hover:bg-zinc-900 px-3 py-1.5 rounded-xl border border-zinc-800 transition-colors">
+          <input
+            type="checkbox"
+            checked={excludeZeroPortHosts}
+            onChange={(e) => setExcludeZeroPortHosts(e.target.checked)}
+            className="rounded bg-zinc-950 border-zinc-700 text-amber-500 focus:ring-0"
+          />
+          <Shield size={13} className={excludeZeroPortHosts ? 'text-amber-400' : 'text-zinc-500'} />
+          <span className="font-semibold text-zinc-200">Exclude zero-port hosts during port scans</span>
+          <span className="text-[10px] text-zinc-500 font-mono hidden sm:inline">(Auto-disabled for ping sweeps)</span>
+        </label>
+
+        {streamedHosts.length > 0 && (
+          <div className="flex items-center gap-1.5 text-xs font-mono">
+            <span className="text-zinc-500">Show:</span>
+            <div className="flex items-center bg-zinc-900 p-0.5 rounded-lg border border-zinc-800 text-[10.5px]">
+              <button
+                onClick={() => setStreamFilter('all')}
+                className={`px-2 py-0.5 rounded transition-colors ${
+                  streamFilter === 'all' ? 'bg-sky-600 text-white font-bold' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                All ({streamedHosts.length})
+              </button>
+              <button
+                onClick={() => setStreamFilter('ping_up')}
+                className={`px-2 py-0.5 rounded transition-colors flex items-center gap-1 ${
+                  streamFilter === 'ping_up' ? 'bg-emerald-600 text-white font-bold' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Radio size={9} />
+                <span>Ping Up ({hostsUpCount})</span>
+              </button>
+              <button
+                onClick={() => setStreamFilter('open_ports')}
+                className={`px-2 py-0.5 rounded transition-colors flex items-center gap-1 ${
+                  streamFilter === 'open_ports' ? 'bg-amber-600 text-white font-bold' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Shield size={9} />
+                <span>Open Ports ({hostsWithPortsCount})</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Command Input Bar */}
       <div className="flex gap-2">
@@ -569,7 +679,7 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
             disabled={isRunning}
             placeholder={
               scanMode === 'live'
-                ? 'nmap -sV -F 192.168.0.0/24'
+                ? 'nmap -sn 192.168.0.0/24 or nmap -sV -F 192.168.0.0/24'
                 : 'nmap -sS -sV -O -A --traceroute target...'
             }
             className={`w-full pl-8 pr-4 py-2 rounded-xl bg-black border font-mono text-xs placeholder-zinc-600 focus:outline-none disabled:opacity-60 ${
@@ -627,25 +737,46 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
       </div>
 
       {/* Real-time Streaming Host Cards */}
-      {streamedHosts.length > 0 && (
+      {visibleStreamedHosts.length > 0 && (
         <div className="space-y-2">
-          <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
-            Discovered Active Targets ({streamedHosts.length}):
-          </span>
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
+              Discovered Active Targets ({visibleStreamedHosts.length}
+              {streamedHosts.length > visibleStreamedHosts.length
+                ? ` filtered / ${streamedHosts.length} total`
+                : ''}):
+            </span>
+          </div>
           <div className="flex flex-wrap gap-2">
-            {streamedHosts.map((h) => (
-              <div
-                key={h.id}
-                className="px-3 py-1.5 rounded-lg bg-zinc-900/80 border border-zinc-800 text-xs font-mono flex items-center gap-2 animate-fade-in"
-              >
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span className="font-bold text-white">{h.ipv4 || h.id}</span>
-                {h.primaryHostname && <span className="text-zinc-400">({h.primaryHostname})</span>}
-                <span className="px-1.5 py-0.5 rounded bg-sky-950 text-sky-400 text-[10px]">
-                  {h.ports.filter((p) => p.state === 'open').length} ports
-                </span>
-              </div>
-            ))}
+            {visibleStreamedHosts.map((h) => {
+              const openPorts = h.ports.filter((p) => p.state === 'open');
+              const isUp = h.status.state === 'up';
+              return (
+                <div
+                  key={h.id}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-900/80 border border-zinc-800 text-xs font-mono flex items-center gap-2 animate-fade-in"
+                >
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      isUp ? (openPorts.length > 0 ? 'bg-emerald-400' : 'bg-sky-400') : 'bg-rose-500'
+                    }`}
+                  />
+                  <span className="font-bold text-white">{h.ipv4 || h.id}</span>
+                  {h.primaryHostname && <span className="text-zinc-400">({h.primaryHostname})</span>}
+                  <span
+                    className={`px-1.5 py-0.5 rounded text-[10px] ${
+                      openPorts.length > 0
+                        ? 'bg-sky-950 text-sky-400 border border-sky-800/40'
+                        : isUp
+                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40'
+                        : 'bg-zinc-800 text-zinc-400'
+                    }`}
+                  >
+                    {openPorts.length > 0 ? `${openPorts.length} ports` : isUp ? 'Ping Up' : 'Down'}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -663,7 +794,7 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
                 ? 'text-rose-400'
                 : line.startsWith('[STDERR]')
                 ? 'text-amber-400'
-                : line.includes('✔') || line.includes('Successfully')
+                : line.includes('✔') || line.includes('Successfully') || line.includes('Complete')
                 ? 'text-emerald-400'
                 : 'text-zinc-300'
             }`}

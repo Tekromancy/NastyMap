@@ -387,6 +387,30 @@ export default function Home() {
             </div>
           </div>
 
+          {/* Quick 1-Click Prune/Filter 0-Port Hosts Button if present */}
+          {currentScan.hosts.length > currentScan.hosts.filter((h) => h.ports.some((p) => p.state === 'open')).length &&
+            currentScan.hosts.filter((h) => h.ports.some((p) => p.state === 'open')).length > 0 && (
+              <button
+                onClick={() => {
+                  const withPorts = currentScan.hosts.filter((h) => h.ports.some((p) => p.state === 'open'));
+                  setCurrentScan((prev) => ({
+                    ...prev,
+                    hosts: withPorts,
+                  }));
+                }}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-950/70 hover:bg-amber-900 border border-amber-800 text-amber-300 text-xs font-semibold shadow-sm transition-all"
+                title={`Click to remove ${
+                  currentScan.hosts.length - currentScan.hosts.filter((h) => h.ports.some((p) => p.state === 'open')).length
+                } host(s) with zero open ports from current active scan`}
+              >
+                <Shield size={13} className="text-amber-400" />
+                <span>
+                  Exclude {currentScan.hosts.length - currentScan.hosts.filter((h) => h.ports.some((p) => p.state === 'open')).length} Empty IP
+                  {currentScan.hosts.length - currentScan.hosts.filter((h) => h.ports.some((p) => p.state === 'open')).length > 1 ? 's' : ''}
+                </span>
+              </button>
+            )}
+
           {/* Upload XML Button */}
           <button
             onClick={() => setShowUploadModal(true)}

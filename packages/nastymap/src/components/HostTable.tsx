@@ -11,6 +11,7 @@ import {
   Server,
   ChevronRight,
   Zap,
+  Radio,
 } from 'lucide-react';
 
 export interface HostTableProps {
@@ -34,11 +35,13 @@ export function HostTable({
   const [sortField, setSortField] = useState<SortField>('ip');
   const [sortAsc, setSortAsc] = useState(true);
   const [statusFilter, setStatusFilter] = useState<'all' | 'up' | 'down'>('all');
+  const [onlyOpenPorts, setOnlyOpenPorts] = useState<boolean>(false);
 
   const filteredHosts = useMemo(() => {
     const q = search.trim().toLowerCase();
     return scan.hosts.filter((h) => {
       if (statusFilter !== 'all' && h.status.state !== statusFilter) return false;
+      if (onlyOpenPorts && !h.ports.some((p) => p.state === 'open')) return false;
       if (!q) return true;
 
       const ip = (h.ipv4 || h.ipv6 || h.id).toLowerCase();
@@ -147,12 +150,24 @@ export function HostTable({
               All ({scan.hosts.length})
             </button>
             <button
-              onClick={() => setStatusFilter('up')}
-              className={`px-2.5 py-1 rounded-md transition-colors ${
+              onClick={() => setStatusFilter(statusFilter === 'up' ? 'all' : 'up')}
+              className={`px-2.5 py-1 rounded-md transition-colors flex items-center gap-1.5 ${
                 statusFilter === 'up' ? 'bg-emerald-600 text-white font-semibold' : 'text-zinc-400 hover:text-white'
               }`}
+              title="Filter to hosts that responded to ping (state=up)"
             >
-              Up ({scan.hosts.filter((h) => h.status.state === 'up').length})
+              <Radio size={11} className={statusFilter === 'up' ? 'text-white animate-pulse' : 'text-emerald-400'} />
+              <span>Ping Up ({scan.hosts.filter((h) => h.status.state === 'up').length})</span>
+            </button>
+            <button
+              onClick={() => setOnlyOpenPorts((v) => !v)}
+              className={`px-2.5 py-1 rounded-md transition-colors flex items-center gap-1.5 ${
+                onlyOpenPorts ? 'bg-amber-600 text-white font-semibold' : 'text-zinc-400 hover:text-white'
+              }`}
+              title="Filter out hosts with zero open ports"
+            >
+              <Shield size={12} className={onlyOpenPorts ? 'text-amber-200' : 'text-zinc-500'} />
+              <span>With Open Ports ({scan.hosts.filter((h) => h.ports.some((p) => p.state === 'open')).length})</span>
             </button>
           </div>
         </div>
@@ -231,15 +246,23 @@ export function HostTable({
                     {host.primaryHostname || '-'}
                   </td>
                   <td className="py-3 px-4">
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                        host.status.state === 'up'
-                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
-                          : 'bg-rose-950 text-rose-400 border border-rose-800/60'
-                      }`}
-                    >
-                      {host.status.state}
-                    </span>
+                    <div className="flex flex-col gap-0.5 items-start">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase flex items-center gap-1 ${
+                          host.status.state === 'up'
+                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
+                            : 'bg-rose-950 text-rose-400 border border-rose-800/60'
+                        }`}
+                      >
+                        <Radio size={9} className={host.status.state === 'up' ? 'text-emerald-400' : 'text-rose-400'} />
+                        <span>{host.status.state}</span>
+                      </span>
+                      {host.status.reason && (
+                        <span className="text-[9.5px] font-mono text-zinc-500 truncate max-w-[110px]" title={`Ping response reason: ${host.status.reason}`}>
+                          {host.status.reason}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="py-3 px-4 text-zinc-300">
                     <div>{host.primaryOs || host.osFamily || 'Unknown'}</div>

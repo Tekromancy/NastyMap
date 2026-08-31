@@ -379,6 +379,44 @@ export function NmapTopologyView({
             </button>
           </div>
 
+          {/* Quick 1-Click Toggle for Open Ports Only */}
+          <button
+            onClick={() => setOnlyOpenPorts((v) => !v)}
+            className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all ${
+              onlyOpenPorts
+                ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+            title={onlyOpenPorts ? 'Showing only hosts with open ports (Click to show all)' : 'Click to hide/exclude hosts with zero open ports'}
+          >
+            <Shield size={13} className={onlyOpenPorts ? 'text-amber-400' : 'text-zinc-500'} />
+            <span className="hidden sm:inline">Open Ports Only</span>
+            <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold ${
+              onlyOpenPorts ? 'bg-amber-400/30 text-amber-200' : 'bg-zinc-800 text-zinc-400'
+            }`}>
+              {graph.nodes.filter((n) => n.nodeType === 'host' && n.openPorts.length > 0).length}/{graph.nodes.filter((n) => n.nodeType === 'host').length}
+            </span>
+          </button>
+
+          {/* Quick 1-Click Toggle for Ping Responsive (Up) */}
+          <button
+            onClick={() => setOnlyUpHosts((v) => !v)}
+            className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all ${
+              onlyUpHosts
+                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 shadow-sm'
+                : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+            title={onlyUpHosts ? 'Showing only hosts that responded to ping/discovery (Click to show all)' : 'Click to filter and show only ping-responsive hosts'}
+          >
+            <Radio size={13} className={onlyUpHosts ? 'text-emerald-400 animate-pulse' : 'text-zinc-500'} />
+            <span className="hidden sm:inline">Ping Up</span>
+            <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold ${
+              onlyUpHosts ? 'bg-emerald-400/30 text-emerald-200' : 'bg-zinc-800 text-zinc-400'
+            }`}>
+              {graph.nodes.filter((n) => n.nodeType === 'host' && n.status === 'up').length}/{graph.nodes.filter((n) => n.nodeType === 'host').length}
+            </span>
+          </button>
+
           {/* Physics Play/Pause (only for force layout) */}
           {layout === 'force' && (
             <button

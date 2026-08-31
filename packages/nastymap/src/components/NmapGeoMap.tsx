@@ -13,6 +13,8 @@ import {
   Layers,
   Server,
   Info,
+  Shield,
+  Radio,
 } from 'lucide-react';
 
 export interface NmapGeoMapProps {
@@ -49,6 +51,8 @@ export function NmapGeoMap({ scan, onSelectHost, className = '' }: NmapGeoMapPro
   const [startPan, setStartPan] = useState({ x: 0, y: 0 });
   const [hoveredHost, setHoveredHost] = useState<NmapHost | null>(null);
   const [showFlightArcs, setShowFlightArcs] = useState(true);
+  const [onlyOpenPorts, setOnlyOpenPorts] = useState(false);
+  const [onlyUpHosts, setOnlyUpHosts] = useState(false);
 
   const baseWidth = 1000;
   const baseHeight = 500;
@@ -65,8 +69,14 @@ export function NmapGeoMap({ scan, onSelectHost, className = '' }: NmapGeoMapPro
   const scannerCoords = latLngToCoords(scannerGeo.lat, scannerGeo.lng);
 
   // Group hosts by unique coordinates to handle clusters
+  const visibleHosts = scan.hosts.filter((h) => {
+    if (onlyOpenPorts && !h.ports.some((p) => p.state === 'open')) return false;
+    if (onlyUpHosts && h.status.state !== 'up') return false;
+    return true;
+  });
+
   const geoClusters = new Map<string, { lat: number; lng: number; hosts: NmapHost[] }>();
-  for (const host of scan.hosts) {
+  for (const host of visibleHosts) {
     const geo = host.geolocation || geocodeIp(host.ipv4 || host.id);
     const key = `${geo.latitude.toFixed(2)},${geo.longitude.toFixed(2)}`;
     if (!geoClusters.has(key)) {
@@ -146,6 +156,30 @@ export function NmapGeoMap({ scan, onSelectHost, className = '' }: NmapGeoMapPro
             }`}
           >
             Flight Arcs
+          </button>
+          <button
+            onClick={() => setOnlyOpenPorts((v) => !v)}
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              onlyOpenPorts
+                ? 'bg-amber-600/30 text-amber-300 border border-amber-500/40'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+            title="Filter out hosts with zero open ports"
+          >
+            <Shield size={12} className={onlyOpenPorts ? 'text-amber-300' : 'text-zinc-400'} />
+            <span>Open Ports ({scan.hosts.filter((h) => h.ports.some((p) => p.state === 'open')).length}/{scan.hosts.length})</span>
+          </button>
+          <button
+            onClick={() => setOnlyUpHosts((v) => !v)}
+            className={`px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+              onlyUpHosts
+                ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/40'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
+            title="Filter to hosts that responded to ping (state=up)"
+          >
+            <Radio size={12} className={onlyUpHosts ? 'text-emerald-300 animate-pulse' : 'text-zinc-400'} />
+            <span>Ping Up ({scan.hosts.filter((h) => h.status.state === 'up').length}/{scan.hosts.length})</span>
           </button>
         </div>
       </div>
