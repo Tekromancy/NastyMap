@@ -10,15 +10,22 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const rawCommand: string = body.command?.trim() || '';
+    let rawCommand: string = body.command?.trim() || '';
     const target: string = body.target?.trim() || '';
+    const sudoPassword: string | undefined = body.sudoPassword?.trim();
+    let useSudo: boolean = body.useSudo === true;
+
+    // Check if user explicitly typed 'sudo'
+    if (rawCommand.startsWith('sudo ')) {
+      useSudo = true;
+      rawCommand = rawCommand.slice(5).trim();
+    }
 
     let commandArgs: string[] = [];
 
     if (rawCommand) {
       // Split command string into arguments while respecting quotes
       const matches = rawCommand.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
-      // Strip leading 'nmap' if user typed it
       const filtered = matches.map((arg) => arg.replace(/^['"]|['"]$/g, ''));
       if (filtered[0]?.toLowerCase() === 'nmap') {
         commandArgs = filtered.slice(1);
@@ -29,6 +36,23 @@ export async function POST(req: NextRequest) {
       commandArgs = ['-sV', '-F', target];
     } else {
       commandArgs = ['-F', '127.0.0.1'];
+    }
+
+    // Check if command has flags requiring root privileges
+    const requiresRootFlags = ['-O', '-sS', '-sU', '-sN', '-sF', '-sX', '-sA', '-sW', '-sM', '--traceroute'];
+    const commandHasRootFlag = commandArgs.some((arg) =>
+      requiresRootFlags.includes(arg) || arg === '-A'
+    );
+
+    if (commandHasRootFlag && body.useSudo !== false) {
+      useSudo = true;
+    }
+
+    // If unprivileged mode was explicitly chosen, sanitize flags that would crash Nmap
+    if (!useSudo) {
+      commandArgs = commandArgs
+        .map((arg) => (arg === '-sS' ? '-sT' : arg))
+        .filter((arg) => arg !== '-O' && arg !== '--traceroute');
     }
 
     // Prepare temporary XML output file path
@@ -63,7 +87,7 @@ export async function POST(req: NextRequest) {
       sanitizedArgs.push('-T4');
     }
 
-    // If -sV is present but no version intensity flag, add --version-light for speed and avoiding timeouts on embedded devices
+    // If -sV is present but no version intensity flag, add --version-light for speed
     if (sanitizedArgs.includes('-sV') && !hasVersionIntensity) {
       sanitizedArgs.push('--version-light');
     }
@@ -86,29 +110,52 @@ export async function POST(req: NextRequest) {
           }
         };
 
+        const displayCmd = `${useSudo ? 'sudo ' : ''}nmap ${sanitizedArgs.filter((a) => a !== tempXmlPath && a !== '-oX').join(' ')}`;
         sendEvent({
           type: 'start',
           data: {
-            command: `nmap ${sanitizedArgs.filter((a) => a !== tempXmlPath && a !== '-oX').join(' ')}`,
+            command: displayCmd,
+            useSudo,
             timestamp: new Date().toISOString(),
           },
         });
 
-        // Spawn nmap process
-        const nmapProcess = spawn('nmap', sanitizedArgs, {
+        // Determine executable and spawn parameters
+        let executable = 'nmap';
+        let spawnArgs = sanitizedArgs;
+
+        if (useSudo) {
+          executable = 'sudo';
+          if (sudoPassword) {
+            // Pass password via stdin (-S) non-interactively without prompt (-p '')
+            spawnArgs = ['-S', '-p', '', 'nmap', ...sanitizedArgs];
+          } else {
+            // Non-interactive passwordless sudo attempt (-n)
+            spawnArgs = ['-n', 'nmap', ...sanitizedArgs];
+          }
+        }
+
+        const nmapProcess = spawn(executable, spawnArgs, {
           shell: false,
         });
 
+        // If sudo password was provided, write it to stdin immediately
+        if (useSudo && sudoPassword && nmapProcess.stdin) {
+          try {
+            nmapProcess.stdin.write(sudoPassword + '\n');
+            nmapProcess.stdin.end();
+          } catch (e) {}
+        }
+
         let aborted = false;
+        let sudoAuthFailed = false;
 
         // Handle client abort
         req.signal.addEventListener('abort', () => {
           aborted = true;
           try {
             nmapProcess.kill('SIGTERM');
-          } catch (e) {
-            // ignore
-          }
+          } catch (e) {}
           fs.unlink(tempXmlPath).catch(() => {});
         });
 
@@ -127,7 +174,7 @@ export async function POST(req: NextRequest) {
 
             sendEvent({
               type: 'error',
-              error: 'Scan timed out after 180 seconds. Try using layered scanning (-sn first, then targeted port scans) for large subnets.',
+              error: 'Scan timed out after 180 seconds.',
               xml: partialXml || undefined,
             });
             controller.close();
@@ -146,7 +193,23 @@ export async function POST(req: NextRequest) {
         nmapProcess.stderr.on('data', (chunk: Buffer) => {
           const lines = chunk.toString('utf-8').split(/\r?\n/);
           for (const line of lines) {
-            if (line.trim()) {
+            if (!line.trim()) continue;
+            
+            // Check for sudo password / root privilege errors
+            if (line.includes('a password is required') || line.includes('incorrect password') || line.includes('sudo:')) {
+              sudoAuthFailed = true;
+              sendEvent({
+                type: 'error',
+                error: 'SUDO_PASSWORD_REQUIRED',
+                line: `[SUDO] Sudo password required for root privileges.`,
+              });
+            } else if (line.includes('requires root privileges')) {
+              sendEvent({
+                type: 'error',
+                error: 'ROOT_PRIVILEGES_REQUIRED',
+                line: `[PRIVILEGE] ${line}`,
+              });
+            } else {
               sendEvent({ type: 'stderr', line });
             }
           }
@@ -156,7 +219,7 @@ export async function POST(req: NextRequest) {
           clearTimeout(timeoutTimer);
           sendEvent({
             type: 'error',
-            error: `Failed to execute nmap: ${err.message}. Ensure nmap is installed and on the system PATH.`,
+            error: `Failed to execute: ${err.message}.`,
           });
           controller.close();
           fs.unlink(tempXmlPath).catch(() => {});
@@ -175,9 +238,7 @@ export async function POST(req: NextRequest) {
           try {
             xmlContent = await fs.readFile(tempXmlPath, 'utf-8');
             await fs.unlink(tempXmlPath).catch(() => {});
-          } catch (e) {
-            // Temp XML may not exist if nmap failed before writing
-          }
+          } catch (e) {}
 
           sendEvent({
             type: 'done',
