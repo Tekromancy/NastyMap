@@ -487,9 +487,14 @@ export default function Home() {
         {activeTab === 'live' && (
           <div className="space-y-6">
             <LiveScanRunner
-              onScanCompleted={(newScan) => {
+              onScanCompleted={(newScan, mode, command) => {
                 setCurrentScan(newScan);
-                setActiveScanLabel('Live Simulated Scan');
+                if (mode === 'live') {
+                  const targetArg = command.split(/\s+/).pop() || 'Live Target';
+                  setActiveScanLabel(`Live Nmap Scan (${targetArg})`);
+                } else {
+                  setActiveScanLabel('Live Simulated Scan');
+                }
               }}
             />
             <NmapTopologyView
