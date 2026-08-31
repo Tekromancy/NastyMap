@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import type { NmapHost, NmapRun } from 'nastymap';
-import { parseNmapXml, ENTERPRISE_NETWORK_XML, GLOBAL_PERIMETER_XML } from 'nastymap';
+import { parseNmapXml, mergeScanResults, ENTERPRISE_NETWORK_XML, GLOBAL_PERIMETER_XML } from 'nastymap';
 import {
   Play,
   Square,
@@ -22,6 +22,9 @@ import {
   Laptop,
   Filter,
   Zap,
+  Layers,
+  ChevronRight,
+  Sliders,
 } from 'lucide-react';
 
 export interface NetworkInterfaceInfo {
@@ -49,21 +52,39 @@ export interface LiveScanRunnerProps {
   className?: string;
 }
 
+export type ScanLayerId = 'ping' | 'ports' | 'services' | 'os_trace';
+
+export interface ScanLayerState {
+  id: ScanLayerId;
+  name: string;
+  desc: string;
+  status: 'idle' | 'running' | 'completed' | 'skipped' | 'failed';
+  summary?: string;
+}
+
 export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunnerProps) {
   const [scanMode, setScanMode] = useState<'simulated' | 'live'>('simulated');
   const [showWarningModal, setShowWarningModal] = useState<boolean>(false);
   const [acknowledgedWarning, setAcknowledgedWarning] = useState<boolean>(false);
 
-  const [command, setCommand] = useState('nmap -sS -sV -O -A --traceroute -T4 10.0.0.0/24');
+  // Scan execution mode: 'progressive' (layered multi-stage) vs 'custom' (single command)
+  const [scanExecutionStyle, setScanExecutionStyle] = useState<'progressive' | 'custom'>('progressive');
+
+  const [targetSubnet, setTargetSubnet] = useState<string>('10.0.0.0/24');
+  const [customCommand, setCustomCommand] = useState<string>('nmap -sS -sV -O -A --traceroute -T4 10.0.0.0/24');
+
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentPhase, setCurrentPhase] = useState<string>('Ready to scan');
   const [logs, setLogs] = useState<string[]>([
     'NastyMap Interactive Scanner Shell v1.0.0',
-    'MODE: [SIMULATED] — Use toggle above to switch to Live Nmap network scanning.',
-    'Type target IP, subnet or hostname to execute parallel scan.',
+    'PROGRESSIVE SCANNING ENGINE: Multi-layer discovery avoids network timeouts and builds live topology step-by-step.',
   ]);
+
+  // Streamed hosts accumulation
   const [streamedHosts, setStreamedHosts] = useState<NmapHost[]>([]);
+  const [currentCumulativeScan, setCurrentCumulativeScan] = useState<NmapRun | null>(null);
+
   const logContainerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -72,9 +93,17 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
   const [isLoadingInterfaces, setIsLoadingInterfaces] = useState<boolean>(false);
   const [selectedInterface, setSelectedInterface] = useState<NetworkInterfaceInfo | null>(null);
 
-  // Filter option: Exclude zero-port hosts (for port scans) vs keep ping-responsive
-  const [excludeZeroPortHosts, setExcludeZeroPortHosts] = useState<boolean>(true);
-  const [streamFilter, setStreamFilter] = useState<'open_ports' | 'ping_up' | 'all'>('all');
+  // Filter options
+  const [excludeZeroPortHosts, setExcludeZeroPortHosts] = useState<boolean>(false);
+  const [streamFilter, setStreamFilter] = useState<'all' | 'ping_up' | 'open_ports'>('all');
+
+  // Progressive Layers State
+  const [layers, setLayers] = useState<ScanLayerState[]>([
+    { id: 'ping', name: 'Layer 1: Host Discovery', desc: 'Fast ping & ARP sweep across subnet', status: 'idle' },
+    { id: 'ports', name: 'Layer 2: Fast Port Scan', desc: 'Top 100 ports on confirmed live hosts', status: 'idle' },
+    { id: 'services', name: 'Layer 3: Service Banners', desc: 'Targeted fingerprinting on open ports', status: 'idle' },
+    { id: 'os_trace', name: 'Layer 4: OS & Traceroute', desc: 'TCP/IP fingerprinting and route hops', status: 'idle' },
+  ]);
 
   useEffect(() => {
     if (logContainerRef.current) {
@@ -94,8 +123,11 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
           const firstExternal = data.interfaces.find((i: NetworkInterfaceInfo) => !i.isInternal);
           if (firstExternal) {
             setSelectedInterface(firstExternal);
+            setTargetSubnet(firstExternal.networkCidr);
+            setCustomCommand(`nmap -sV -F ${firstExternal.networkCidr}`);
           } else if (data.interfaces[0]) {
             setSelectedInterface(data.interfaces[0]);
+            setTargetSubnet(data.interfaces[0].networkCidr);
           }
         }
       }
@@ -118,7 +150,8 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
       setShowWarningModal(true);
     } else {
       setScanMode('simulated');
-      setCommand('nmap -sS -sV -O -A --traceroute -T4 10.0.0.0/24');
+      setTargetSubnet('10.0.0.0/24');
+      setCustomCommand('nmap -sS -sV -O -A --traceroute -T4 10.0.0.0/24');
       setLogs((prev) => [
         ...prev,
         `[${new Date().toLocaleTimeString()}] Switched to SIMULATED mode (Safe mock scan data).`,
@@ -133,16 +166,284 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
 
     const primaryNet = interfaces.find((i) => !i.isInternal);
     if (primaryNet) {
-      setCommand(`nmap -sV -F ${primaryNet.networkCidr}`);
+      setTargetSubnet(primaryNet.networkCidr);
+      setCustomCommand(`nmap -sn ${primaryNet.networkCidr}`);
     } else {
-      setCommand('nmap -sV -F scanme.nmap.org');
+      setTargetSubnet('scanme.nmap.org');
+      setCustomCommand('nmap -sV -F scanme.nmap.org');
     }
 
     setLogs((prev) => [
       ...prev,
       `[${new Date().toLocaleTimeString()}] ⚠️ LIVE SCAN MODE ENABLED: Real network packets will be transmitted.`,
-      `[${new Date().toLocaleTimeString()}] Auto-detected ${interfaces.length} interface(s) on host. Select a subnet below to populate command.`,
+      `[${new Date().toLocaleTimeString()}] Progressive scanning will discover live hosts first with ping, then probe ports on live targets only.`,
     ]);
+  };
+
+  const updateLayerStatus = (layerId: ScanLayerId, status: ScanLayerState['status'], summary?: string) => {
+    setLayers((prev) =>
+      prev.map((l) => (l.id === layerId ? { ...l, status, summary: summary || l.summary } : l))
+    );
+  };
+
+  // Helper to execute a single Nmap command and return parsed scan
+  const executeSingleNmapCommand = async (cmd: string, signal: AbortSignal): Promise<NmapRun | null> => {
+    setLogs((prev) => [
+      ...prev,
+      `[${new Date().toLocaleTimeString()}] ─── Executing: ${cmd} ───`,
+    ]);
+
+    const response = await fetch('/api/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd }),
+      signal,
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+
+    if (!response.body) throw new Error('No stream body');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let buffer = '';
+    let receivedXml = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line);
+          if (event.type === 'stdout' && event.line) {
+            setLogs((prev) => [...prev, event.line]);
+          } else if (event.type === 'stderr' && event.line) {
+            setLogs((prev) => [...prev, `[STDERR] ${event.line}`]);
+          } else if (event.type === 'error' && event.error) {
+            setLogs((prev) => [...prev, `[ERROR] ${event.error}`]);
+          } else if (event.type === 'done' && event.xml) {
+            receivedXml = event.xml;
+          }
+        } catch {
+          setLogs((prev) => [...prev, line]);
+        }
+      }
+    }
+
+    if (receivedXml) {
+      return parseNmapXml(receivedXml);
+    }
+    return null;
+  };
+
+  // RUN PROGRESSIVE LAYERED LIVE SCAN
+  const handleStartProgressiveLiveScan = async () => {
+    setIsRunning(true);
+    setProgress(5);
+    setStreamedHosts([]);
+    setCurrentCumulativeScan(null);
+
+    // Reset layers
+    setLayers([
+      { id: 'ping', name: 'Layer 1: Host Discovery', desc: 'Fast ping & ARP sweep across subnet', status: 'running' },
+      { id: 'ports', name: 'Layer 2: Fast Port Scan', desc: 'Top 100 ports on confirmed live hosts', status: 'idle' },
+      { id: 'services', name: 'Layer 3: Service Banners', desc: 'Targeted fingerprinting on open ports', status: 'idle' },
+      { id: 'os_trace', name: 'Layer 4: OS & Traceroute', desc: 'TCP/IP fingerprinting and route hops', status: 'idle' },
+    ]);
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    const target = targetSubnet.trim() || '127.0.0.1';
+    let cumulativeScan: NmapRun | null = null;
+
+    try {
+      // ════════════════════════════════════════════════════════════════════
+      // LAYER 1: Host Discovery (Ping Sweep)
+      // ════════════════════════════════════════════════════════════════════
+      setCurrentPhase('Layer 1/4: Discovering live hosts across subnet (Ping Sweep)...');
+      setProgress(15);
+
+      const layer1Cmd = `nmap -sn -T4 ${target}`;
+      const l1Scan = await executeSingleNmapCommand(layer1Cmd, abortController.signal);
+
+      if (!l1Scan || l1Scan.hosts.length === 0) {
+        updateLayerStatus('ping', 'failed', 'No responsive hosts found');
+        throw new Error(`Host discovery returned 0 live hosts for target: ${target}`);
+      }
+
+      const liveHosts = l1Scan.hosts.filter((h) => h.status.state === 'up');
+      const liveIps = liveHosts.map((h) => h.ipv4 || h.id).filter(Boolean);
+
+      updateLayerStatus('ping', 'completed', `${liveIps.length} live hosts discovered`);
+      cumulativeScan = l1Scan;
+      setCurrentCumulativeScan(cumulativeScan);
+      setStreamedHosts(cumulativeScan.hosts);
+      onScanCompleted(cumulativeScan, 'live', `Layer 1 (Ping): ${target}`);
+
+      setLogs((prev) => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] ✔ Layer 1 Complete: Found ${liveIps.length} responsive host(s): ${liveIps.join(', ')}`,
+        `[${new Date().toLocaleTimeString()}] Network topology updated with live hosts!`,
+      ]);
+
+      if (liveIps.length === 0) {
+        setIsRunning(false);
+        return;
+      }
+
+      // ════════════════════════════════════════════════════════════════════
+      // LAYER 2: Fast Port Scan on Live Hosts Only
+      // ════════════════════════════════════════════════════════════════════
+      updateLayerStatus('ports', 'running');
+      setCurrentPhase(`Layer 2/4: Scanning ports on ${liveIps.length} confirmed live host(s)...`);
+      setProgress(40);
+
+      // Probe top 100 fast ports on confirmed live IPs only (avoids scanning hundreds of non-existent hosts!)
+      const layer2Cmd = `nmap -sT -F -T4 ${liveIps.join(' ')}`;
+      const l2Scan = await executeSingleNmapCommand(layer2Cmd, abortController.signal);
+
+      if (l2Scan) {
+        cumulativeScan = mergeScanResults(cumulativeScan, l2Scan);
+        setCurrentCumulativeScan(cumulativeScan);
+        setStreamedHosts(cumulativeScan.hosts);
+        onScanCompleted(cumulativeScan, 'live', `Layer 2 (Ports): ${target}`);
+
+        const totalOpenPorts = cumulativeScan.hosts.reduce(
+          (acc, h) => acc + h.ports.filter((p) => p.state === 'open').length,
+          0
+        );
+        updateLayerStatus('ports', 'completed', `${totalOpenPorts} open ports discovered`);
+        setLogs((prev) => [
+          ...prev,
+          `[${new Date().toLocaleTimeString()}] ✔ Layer 2 Complete: Mapped ${totalOpenPorts} open port(s) across live hosts.`,
+        ]);
+      } else {
+        updateLayerStatus('ports', 'skipped', 'No port data returned');
+      }
+
+      // ════════════════════════════════════════════════════════════════════
+      // LAYER 3: Targeted Service & Version Detection
+      // ════════════════════════════════════════════════════════════════════
+      const hostsWithOpenPorts = cumulativeScan.hosts.filter((h) =>
+        h.ports.some((p) => p.state === 'open')
+      );
+      const targetIpsForServices = hostsWithOpenPorts.map((h) => h.ipv4 || h.id).filter(Boolean);
+
+      if (targetIpsForServices.length > 0) {
+        updateLayerStatus('services', 'running');
+        setCurrentPhase(`Layer 3/4: Probing service versions on ${targetIpsForServices.length} host(s) with open ports...`);
+        setProgress(70);
+
+        // Targeted service probe with --version-light -T4 to prevent hanging on embedded/slow services
+        const layer3Cmd = `nmap -sV --version-light -T4 ${targetIpsForServices.join(' ')}`;
+        const l3Scan = await executeSingleNmapCommand(layer3Cmd, abortController.signal);
+
+        if (l3Scan) {
+          cumulativeScan = mergeScanResults(cumulativeScan, l3Scan);
+          setCurrentCumulativeScan(cumulativeScan);
+          setStreamedHosts(cumulativeScan.hosts);
+          onScanCompleted(cumulativeScan, 'live', `Layer 3 (Services): ${target}`);
+          updateLayerStatus('services', 'completed', 'Service banners identified');
+          setLogs((prev) => [
+            ...prev,
+            `[${new Date().toLocaleTimeString()}] ✔ Layer 3 Complete: Service products and versions fingerprinted.`,
+          ]);
+        } else {
+          updateLayerStatus('services', 'skipped', 'Service probe completed without changes');
+        }
+      } else {
+        updateLayerStatus('services', 'skipped', 'No open ports to probe for services');
+      }
+
+      // ════════════════════════════════════════════════════════════════════
+      // LAYER 4: OS & Traceroute Detection
+      // ════════════════════════════════════════════════════════════════════
+      const targetIpsForOs = (targetIpsForServices.length > 0 ? targetIpsForServices : liveIps).slice(0, 5); // Limit OS detection to first 5 for speed
+      updateLayerStatus('os_trace', 'running');
+      setCurrentPhase(`Layer 4/4: Traceroute & OS matching on ${targetIpsForOs.length} target(s)...`);
+      setProgress(90);
+
+      const layer4Cmd = `nmap -O --osscan-limit --traceroute -T4 ${targetIpsForOs.join(' ')}`;
+      const l4Scan = await executeSingleNmapCommand(layer4Cmd, abortController.signal);
+
+      if (l4Scan) {
+        cumulativeScan = mergeScanResults(cumulativeScan, l4Scan);
+        setCurrentCumulativeScan(cumulativeScan);
+        setStreamedHosts(cumulativeScan.hosts);
+        onScanCompleted(cumulativeScan, 'live', `Layer 4 (Full Audit): ${target}`);
+        updateLayerStatus('os_trace', 'completed', 'OS and routes mapped');
+      } else {
+        updateLayerStatus('os_trace', 'skipped', 'OS scan finished');
+      }
+
+      setProgress(100);
+      setCurrentPhase('Progressive Multi-Layer Scan Completed Successfully');
+      setLogs((prev) => [
+        ...prev,
+        `[${new Date().toLocaleTimeString()}] ═══════════════════════════════════════════════`,
+        `[${new Date().toLocaleTimeString()}] 🎉 ALL SCAN LAYERS COMPLETED SUCCESSFULLY!`,
+        `[${new Date().toLocaleTimeString()}] Live topology and security metrics are fully populated.`,
+      ]);
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        setLogs((prev) => [
+          ...prev,
+          `[${new Date().toLocaleTimeString()}] Scan stopped by user. Previous completed layers were preserved in the topology map!`,
+        ]);
+        setCurrentPhase('Scan Stopped (Partial Layers Preserved)');
+      } else {
+        setLogs((prev) => [
+          ...prev,
+          `[${new Date().toLocaleTimeString()}] Execution Notice: ${err.message}`,
+        ]);
+        setCurrentPhase('Layer Execution Interrupted');
+      }
+    } finally {
+      setIsRunning(false);
+      abortControllerRef.current = null;
+    }
+  };
+
+  // Run Custom Single Command Live Scan
+  const handleStartCustomLiveScan = async () => {
+    setIsRunning(true);
+    setProgress(20);
+    setStreamedHosts([]);
+    setCurrentPhase('Executing custom Nmap command...');
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
+    try {
+      const scan = await executeSingleNmapCommand(customCommand, abortController.signal);
+      if (scan) {
+        setProgress(100);
+        setCurrentPhase('Custom Scan Completed');
+        setStreamedHosts(scan.hosts);
+        onScanCompleted(scan, 'live', customCommand);
+      } else {
+        setCurrentPhase('Scan finished without XML output');
+      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') {
+        setCurrentPhase('Scan Cancelled');
+      } else {
+        setCurrentPhase(`Error: ${err.message}`);
+      }
+    } finally {
+      setIsRunning(false);
+      abortControllerRef.current = null;
+    }
   };
 
   // Run Simulated Scan
@@ -151,25 +452,23 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
     setProgress(0);
     setStreamedHosts([]);
     setLogs([
-      `[${new Date().toLocaleTimeString()}] [SIMULATED] Starting Nmap 7.94 ( https://nmap.org ) at ${new Date().toUTCString()}`,
-      `[${new Date().toLocaleTimeString()}] Executing: ${command}`,
+      `[${new Date().toLocaleTimeString()}] [SIMULATED] Starting Nmap 7.94 ( https://nmap.org )`,
+      `[${new Date().toLocaleTimeString()}] Target: ${targetSubnet}`,
     ]);
 
     const sourceXml =
-      command.includes('global') || command.includes('1.1.1.1') || command.includes('8.8.8.8')
+      targetSubnet.includes('global') || targetSubnet.includes('1.1.1.1') || targetSubnet.includes('8.8.8.8')
         ? GLOBAL_PERIMETER_XML
         : ENTERPRISE_NETWORK_XML;
 
     const fullScan = parseNmapXml(sourceXml);
     const totalHosts = fullScan.hosts.length;
 
-    // Simulation steps
     const phases = [
-      { p: 15, name: 'Initiating ARP / ICMP Ping Scan', log: 'ARP discovery probe sent to 256 addresses...' },
-      { p: 35, name: 'Initiating Parallel SYN Stealth Scan', log: 'Scanning 1000 ports on active discovered hosts...' },
-      { p: 60, name: 'Initiating Service & Version Detection', log: 'Probing open ports for banners and service fingerprints...' },
-      { p: 80, name: 'Initiating OS Detection & Fingerprinting', log: 'Matching TCP/IP fingerprint against Nmap OS database...' },
-      { p: 95, name: 'Initiating Parallel Traceroute', log: 'Tracing route hops and measuring latency...' },
+      { p: 25, name: 'Layer 1: Initiating Ping Discovery Sweep', log: 'Ping probe sent to subnet addresses...' },
+      { p: 50, name: 'Layer 2: Initiating Parallel SYN Stealth Scan', log: 'Scanning ports on discovered live hosts...' },
+      { p: 75, name: 'Layer 3: Initiating Service & Version Detection', log: 'Probing open ports for banners...' },
+      { p: 95, name: 'Layer 4: Matching OS Fingerprints & Traceroute', log: 'Tracing route hops and latency...' },
     ];
 
     let currentStep = 0;
@@ -180,182 +479,21 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
         setProgress(ph.p);
         setCurrentPhase(ph.name);
         setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${ph.log}`]);
-
         const hostsToShow = fullScan.hosts.slice(0, Math.ceil((currentStep / phases.length) * totalHosts));
         setStreamedHosts(hostsToShow);
       } else {
         clearInterval(interval);
         setProgress(100);
-        setCurrentPhase('Scan Completed Successfully');
-
-        const isPingScan = command.includes('-sn') || command.includes('-sP');
-        const upHosts = fullScan.hosts.filter((h) => h.status.state === 'up');
-        const hostsWithOpenPorts = fullScan.hosts.filter((h) => h.ports.some((p) => p.state === 'open'));
-
-        let hostsToReturn = fullScan.hosts;
-        if (isPingScan) {
-          hostsToReturn = upHosts.length > 0 ? upHosts : fullScan.hosts;
-        } else if (excludeZeroPortHosts && hostsWithOpenPorts.length > 0) {
-          hostsToReturn = hostsWithOpenPorts;
-        }
-
+        setCurrentPhase('Simulated Scan Completed Successfully');
         setStreamedHosts(fullScan.hosts);
         setLogs((prev) => [
           ...prev,
-          `[${new Date().toLocaleTimeString()}] Nmap done: ${totalHosts} IP addresses scanned in 4.25 seconds.`,
-          `[${new Date().toLocaleTimeString()}] Topology updated: ${hostsToReturn.length} host(s) mapped (${
-            isPingScan ? `${upHosts.length} responded to ping` : `${hostsWithOpenPorts.length} with open ports`
-          }).`,
+          `[${new Date().toLocaleTimeString()}] Nmap done: ${totalHosts} hosts scanned in 3.4 seconds.`,
         ]);
         setIsRunning(false);
-        onScanCompleted({ ...fullScan, hosts: hostsToReturn }, 'simulated', command);
+        onScanCompleted(fullScan, 'simulated', customCommand);
       }
-    }, 900);
-  };
-
-  // Run Real Nmap Scan via API Route
-  const handleStartLiveScan = async () => {
-    setIsRunning(true);
-    setProgress(10);
-    setStreamedHosts([]);
-    setCurrentPhase('Connecting to Nmap engine...');
-    setLogs([
-      `[${new Date().toLocaleTimeString()}] [LIVE EXECUTION] Initializing real Nmap process on host...`,
-      `[${new Date().toLocaleTimeString()}] Command: ${command}`,
-    ]);
-
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
-
-    try {
-      const response = await fetch('/api/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command }),
-        signal: abortController.signal,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP ${response.status} ${response.statusText}`);
-      }
-
-      if (!response.body) {
-        throw new Error('ReadableStream not supported by response');
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-      let receivedXml = '';
-
-      setProgress(25);
-      setCurrentPhase('Executing real Nmap probes...');
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const event = JSON.parse(line);
-            if (event.type === 'stdout' && event.line) {
-              setLogs((prev) => [...prev, event.line]);
-
-              const txt = event.line.toLowerCase();
-              if (txt.includes('initiating ping scan') || txt.includes('initiating arp') || txt.includes('ping scan')) {
-                setProgress(35);
-                setCurrentPhase('Ping Sweep & Host Discovery Probing...');
-              } else if (txt.includes('initiating syn stealth') || txt.includes('initiating connect scan') || txt.includes('scanning')) {
-                setProgress(55);
-                setCurrentPhase('Port Scanning & State Detection...');
-              } else if (txt.includes('initiating service scan') || txt.includes('version')) {
-                setProgress(75);
-                setCurrentPhase('Service & Application Fingerprinting...');
-              } else if (txt.includes('initiating os detection')) {
-                setProgress(85);
-                setCurrentPhase('OS TCP/IP Fingerprinting...');
-              } else if (txt.includes('discovering open port') || txt.includes('discovered open port')) {
-                setProgress((p) => Math.min(90, p + 5));
-              }
-            } else if (event.type === 'stderr' && event.line) {
-              setLogs((prev) => [...prev, `[STDERR] ${event.line}`]);
-            } else if (event.type === 'error' && event.error) {
-              setLogs((prev) => [...prev, `[ERROR] ${event.error}`]);
-              setCurrentPhase(`Error: ${event.error}`);
-            } else if (event.type === 'done') {
-              if (event.xml) {
-                receivedXml = event.xml;
-              }
-            }
-          } catch (e) {
-            setLogs((prev) => [...prev, line]);
-          }
-        }
-      }
-
-      if (receivedXml) {
-        setProgress(95);
-        setCurrentPhase('Parsing XML output into Topology & Geo layers...');
-        const parsedScan = parseNmapXml(receivedXml);
-        setStreamedHosts(parsedScan.hosts);
-        setProgress(100);
-        setCurrentPhase('Live Real Scan Completed');
-
-        const isPingScan = command.includes('-sn') || command.includes('-sP');
-        const upHosts = parsedScan.hosts.filter((h) => h.status.state === 'up');
-        const hostsWithOpenPorts = parsedScan.hosts.filter((h) => h.ports.some((p) => p.state === 'open'));
-
-        let hostsToReturn = parsedScan.hosts;
-        let summaryMsg = '';
-
-        if (isPingScan) {
-          hostsToReturn = upHosts.length > 0 ? upHosts : parsedScan.hosts;
-          summaryMsg = `✔ Ping Discovery Complete: ${upHosts.length} host(s) responded to ping probes (state=up).`;
-        } else if (excludeZeroPortHosts && hostsWithOpenPorts.length > 0) {
-          hostsToReturn = hostsWithOpenPorts;
-          const zeroPortCount = parsedScan.hosts.length - hostsWithOpenPorts.length;
-          summaryMsg = `✔ Port Scan Complete: Loaded ${hostsToReturn.length} host(s) with open ports (${zeroPortCount} empty 0-port IPs excluded).`;
-        } else {
-          hostsToReturn = upHosts.length > 0 ? upHosts : parsedScan.hosts;
-          summaryMsg = `✔ Scan Complete: Loaded ${hostsToReturn.length} host(s) (${hostsWithOpenPorts.length} with open ports, ${upHosts.length} responsive to ping).`;
-        }
-
-        setLogs((prev) => [
-          ...prev,
-          `[${new Date().toLocaleTimeString()}] ${summaryMsg}`,
-          `[${new Date().toLocaleTimeString()}] Total IP addresses probed: ${parsedScan.hosts.length}.`,
-        ]);
-        onScanCompleted({ ...parsedScan, hosts: hostsToReturn }, 'live', command);
-      } else {
-        setProgress(100);
-        setCurrentPhase('Scan finished (No XML produced)');
-        setLogs((prev) => [
-          ...prev,
-          `[${new Date().toLocaleTimeString()}] Scan process ended without generating XML output. Check console above for error details.`,
-        ]);
-      }
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
-        setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] Scan cancelled by user.`]);
-        setCurrentPhase('Scan Aborted');
-      } else {
-        setLogs((prev) => [
-          ...prev,
-          `[${new Date().toLocaleTimeString()}] Execution Error: ${err.message}`,
-          `[${new Date().toLocaleTimeString()}] Tip: Verify Nmap is installed (/usr/bin/nmap) and target is reachable.`,
-        ]);
-        setCurrentPhase('Scan Execution Failed');
-      }
-    } finally {
-      setIsRunning(false);
-      abortControllerRef.current = null;
-    }
+    }, 800);
   };
 
   const handleStopScan = () => {
@@ -367,10 +505,12 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
 
   const handleRun = () => {
     if (isRunning) return;
-    if (scanMode === 'live') {
-      handleStartLiveScan();
-    } else {
+    if (scanMode === 'simulated') {
       handleStartSimulatedScan();
+    } else if (scanExecutionStyle === 'progressive') {
+      handleStartProgressiveLiveScan();
+    } else {
+      handleStartCustomLiveScan();
     }
   };
 
@@ -403,7 +543,7 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
           <Terminal size={20} className={scanMode === 'live' ? 'text-rose-400' : 'text-sky-400'} />
           <div>
             <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <span>Nmap Interactive Scan Engine</span>
+              <span>Nmap Layered Scan Engine</span>
               {scanMode === 'live' && (
                 <span className="px-2 py-0.5 rounded-md bg-rose-950/80 text-rose-300 font-mono text-[10px] font-bold border border-rose-800 flex items-center gap-1">
                   <Radio size={10} className="text-rose-400 animate-ping" />
@@ -413,7 +553,7 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
             </h3>
             <p className="text-xs text-zinc-400 font-mono">
               {scanMode === 'live'
-                ? 'Direct backend execution with live packet delivery'
+                ? 'Progressive multi-stage scanning prevents timeouts on large subnets'
                 : 'Deterministic multi-phase simulation for demo & topology preview'}
             </p>
           </div>
@@ -499,10 +639,7 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-xs font-bold text-zinc-200">
               <Network size={15} className="text-sky-400" />
-              <span>Detected Local Network Interfaces & Subnets</span>
-              <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-[10px] font-mono text-zinc-400">
-                Auto-Discovered
-              </span>
+              <span>Auto-Detected Local Interfaces & Target Subnets</span>
             </div>
             <button
               onClick={fetchInterfaces}
@@ -515,71 +652,42 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
             </button>
           </div>
 
-          {interfaces.length === 0 ? (
-            <div className="text-xs text-zinc-500 font-mono py-2">
-              {isLoadingInterfaces ? 'Scanning system network interfaces...' : 'No active network interfaces detected.'}
-            </div>
-          ) : (
+          {interfaces.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
               {interfaces.map((iface) => {
+                const isSelected = targetSubnet === iface.networkCidr;
                 return (
                   <div
                     key={`${iface.name}-${iface.ip}`}
-                    className={`p-3 rounded-xl border transition-all text-xs font-mono space-y-2 ${
-                      iface.isInternal
-                        ? 'bg-zinc-950/60 border-zinc-800/80 text-zinc-400'
-                        : 'bg-zinc-950/90 border-sky-900/50 hover:border-sky-500/80 text-zinc-200 shadow-sm'
+                    onClick={() => {
+                      setTargetSubnet(iface.networkCidr);
+                      setCustomCommand(`nmap -sn ${iface.networkCidr}`);
+                    }}
+                    className={`p-3 rounded-xl border transition-all text-xs font-mono space-y-2 cursor-pointer ${
+                      isSelected
+                        ? 'bg-sky-950/70 border-sky-500 shadow-md shadow-sky-900/30'
+                        : iface.isInternal
+                        ? 'bg-zinc-950/60 border-zinc-800/80 text-zinc-400 hover:border-zinc-700'
+                        : 'bg-zinc-950/90 border-zinc-800 hover:border-sky-700 text-zinc-200'
                     }`}
                   >
-                    {/* Interface Header */}
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className={`px-2 py-0.5 rounded font-bold text-[10px] ${
-                          iface.isInternal ? 'bg-zinc-800 text-zinc-400' : 'bg-sky-950 text-sky-400 border border-sky-800/60'
+                          isSelected ? 'bg-sky-500 text-white' : 'bg-zinc-800 text-zinc-400'
                         }`}>
                           {iface.name}
                         </span>
                         <span className="font-bold text-white text-sm">{iface.networkCidr}</span>
                       </div>
-                      <span className="text-[10px] text-zinc-500">
-                        {iface.isInternal ? 'Loopback' : 'Active Subnet'}
+                      <span className="text-[10px] text-zinc-400">
+                        {isSelected ? '✓ Selected Target' : 'Click to Select'}
                       </span>
                     </div>
 
-                    {/* Host IP & Mask Info */}
                     <div className="text-[11px] text-zinc-400 flex items-center justify-between">
                       <span>Host IP: <strong className="text-emerald-400">{iface.ip}</strong></span>
                       <span>Mask: <span className="text-zinc-500">{iface.netmask}</span></span>
-                    </div>
-
-                    {/* Quick Preset Buttons */}
-                    <div className="pt-1.5 border-t border-zinc-800/80 flex flex-wrap gap-1.5">
-                      <button
-                        onClick={() => setCommand(iface.suggestedCommands.fastPortScan)}
-                        className="px-2 py-1 rounded bg-zinc-900 hover:bg-sky-600 hover:text-white text-sky-400 text-[10.5px] border border-zinc-800 transition-colors flex items-center gap-1"
-                        title={`Populate Fast Port Scan: ${iface.suggestedCommands.fastPortScan}`}
-                      >
-                        <Zap size={10} />
-                        <span>Port Scan ({iface.networkCidr})</span>
-                      </button>
-
-                      <button
-                        onClick={() => setCommand(iface.suggestedCommands.fastPingScan)}
-                        className="px-2 py-1 rounded bg-zinc-900 hover:bg-emerald-600 hover:text-white text-emerald-400 text-[10.5px] border border-zinc-800 transition-colors flex items-center gap-1"
-                        title={`Populate Ping Discovery Sweep: ${iface.suggestedCommands.fastPingScan}`}
-                      >
-                        <Radio size={10} />
-                        <span>Ping Sweep (-sn)</span>
-                      </button>
-
-                      <button
-                        onClick={() => setCommand(iface.suggestedCommands.singleHostScan)}
-                        className="px-2 py-1 rounded bg-zinc-900 hover:bg-amber-600 hover:text-white text-amber-400 text-[10.5px] border border-zinc-800 transition-colors flex items-center gap-1"
-                        title={`Populate Self Host: ${iface.suggestedCommands.singleHostScan}`}
-                      >
-                        <Laptop size={10} />
-                        <span>Self Host ({iface.ip})</span>
-                      </button>
                     </div>
                   </div>
                 );
@@ -589,128 +697,178 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
         </div>
       )}
 
-      {/* Target & Command Suggestions (External / Authorized) */}
-      {scanMode === 'live' && !isRunning && (
-        <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
-          <span className="text-zinc-500 font-semibold">Authorized Presets:</span>
+      {/* SCAN STYLE SWITCHER: Progressive Layered vs Custom */}
+      {scanMode === 'live' && (
+        <div className="flex items-center gap-2 border-b border-zinc-800 pb-2 text-xs font-semibold">
+          <span className="text-zinc-400 font-mono">Scan Style:</span>
           <button
-            onClick={() => setCommand('nmap -sn scanme.nmap.org')}
-            className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-emerald-400 border border-zinc-800 transition-colors flex items-center gap-1"
+            onClick={() => setScanExecutionStyle('progressive')}
+            className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors ${
+              scanExecutionStyle === 'progressive'
+                ? 'bg-sky-600 text-white shadow'
+                : 'bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800'
+            }`}
           >
-            <Radio size={11} />
-            <span>scanme.nmap.org (Ping Sweep)</span>
+            <Layers size={13} />
+            <span>Progressive Layered Scan (Recommended)</span>
           </button>
           <button
-            onClick={() => setCommand('nmap -sV -F scanme.nmap.org')}
-            className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-sky-400 border border-zinc-800 transition-colors"
+            onClick={() => setScanExecutionStyle('custom')}
+            className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors ${
+              scanExecutionStyle === 'custom'
+                ? 'bg-sky-600 text-white shadow'
+                : 'bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800'
+            }`}
           >
-            scanme.nmap.org (Port Scan)
-          </button>
-          <button
-            onClick={() => setCommand('nmap -sn 127.0.0.1')}
-            className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-amber-400 border border-zinc-800 transition-colors"
-          >
-            127.0.0.1 (Ping Localhost)
+            <Terminal size={13} />
+            <span>Custom Raw Command</span>
           </button>
         </div>
       )}
 
-      {/* Scanning Options Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-        <label className="flex items-center gap-2 text-zinc-300 font-medium cursor-pointer select-none bg-zinc-900/60 hover:bg-zinc-900 px-3 py-1.5 rounded-xl border border-zinc-800 transition-colors">
-          <input
-            type="checkbox"
-            checked={excludeZeroPortHosts}
-            onChange={(e) => setExcludeZeroPortHosts(e.target.checked)}
-            className="rounded bg-zinc-950 border-zinc-700 text-amber-500 focus:ring-0"
-          />
-          <Shield size={13} className={excludeZeroPortHosts ? 'text-amber-400' : 'text-zinc-500'} />
-          <span className="font-semibold text-zinc-200">Exclude zero-port hosts during port scans</span>
-          <span className="text-[10px] text-zinc-500 font-mono hidden sm:inline">(Auto-disabled for ping sweeps)</span>
-        </label>
-
-        {streamedHosts.length > 0 && (
-          <div className="flex items-center gap-1.5 text-xs font-mono">
-            <span className="text-zinc-500">Show:</span>
-            <div className="flex items-center bg-zinc-900 p-0.5 rounded-lg border border-zinc-800 text-[10.5px]">
-              <button
-                onClick={() => setStreamFilter('all')}
-                className={`px-2 py-0.5 rounded transition-colors ${
-                  streamFilter === 'all' ? 'bg-sky-600 text-white font-bold' : 'text-zinc-400 hover:text-white'
-                }`}
-              >
-                All ({streamedHosts.length})
-              </button>
-              <button
-                onClick={() => setStreamFilter('ping_up')}
-                className={`px-2 py-0.5 rounded transition-colors flex items-center gap-1 ${
-                  streamFilter === 'ping_up' ? 'bg-emerald-600 text-white font-bold' : 'text-zinc-400 hover:text-white'
-                }`}
-              >
-                <Radio size={9} />
-                <span>Ping Up ({hostsUpCount})</span>
-              </button>
-              <button
-                onClick={() => setStreamFilter('open_ports')}
-                className={`px-2 py-0.5 rounded transition-colors flex items-center gap-1 ${
-                  streamFilter === 'open_ports' ? 'bg-amber-600 text-white font-bold' : 'text-zinc-400 hover:text-white'
-                }`}
-              >
-                <Shield size={9} />
-                <span>Open Ports ({hostsWithPortsCount})</span>
-              </button>
-            </div>
+      {/* PROGRESSIVE SCAN LAYER STEPPER */}
+      {scanExecutionStyle === 'progressive' && (
+        <div className="p-4 rounded-xl bg-zinc-900/80 border border-zinc-800 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-zinc-200 flex items-center gap-1.5">
+              <Layers size={14} className="text-sky-400" />
+              <span>Multi-Layer Progressive Scan Pipeline</span>
+            </span>
+            <span className="text-[11px] font-mono text-zinc-400">
+              Target: <strong className="text-sky-300">{targetSubnet}</strong>
+            </span>
           </div>
-        )}
-      </div>
 
-      {/* Command Input Bar */}
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <span className={`absolute left-3.5 top-2.5 font-mono font-bold text-sm select-none ${
-            scanMode === 'live' ? 'text-rose-400' : 'text-emerald-400'
-          }`}>
-            $
-          </span>
-          <input
-            type="text"
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            disabled={isRunning}
-            placeholder={
-              scanMode === 'live'
-                ? 'nmap -sn 192.168.0.0/24 or nmap -sV -F 192.168.0.0/24'
-                : 'nmap -sS -sV -O -A --traceroute target...'
-            }
-            className={`w-full pl-8 pr-4 py-2 rounded-xl bg-black border font-mono text-xs placeholder-zinc-600 focus:outline-none disabled:opacity-60 ${
-              scanMode === 'live'
-                ? 'border-rose-900/60 text-rose-200 focus:border-rose-500'
-                : 'border-zinc-800 text-sky-300 focus:border-sky-500'
-            }`}
-          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+            {layers.map((layer, idx) => {
+              const isLayerRunning = layer.status === 'running';
+              const isLayerDone = layer.status === 'completed';
+              const isLayerSkipped = layer.status === 'skipped';
+              const isLayerFailed = layer.status === 'failed';
+
+              return (
+                <div
+                  key={layer.id}
+                  className={`p-3 rounded-xl border text-xs font-mono space-y-1.5 transition-all ${
+                    isLayerRunning
+                      ? 'bg-sky-950/80 border-sky-500 shadow-md shadow-sky-900/30'
+                      : isLayerDone
+                      ? 'bg-emerald-950/40 border-emerald-800/80'
+                      : isLayerFailed
+                      ? 'bg-rose-950/40 border-rose-800/80'
+                      : 'bg-zinc-950/60 border-zinc-800/80 text-zinc-400'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-white flex items-center gap-1.5">
+                      {isLayerDone ? (
+                        <CheckCircle2 size={13} className="text-emerald-400" />
+                      ) : isLayerRunning ? (
+                        <RefreshCw size={13} className="text-sky-400 animate-spin" />
+                      ) : (
+                        <span className="w-4 h-4 rounded-full bg-zinc-800 text-zinc-400 flex items-center justify-center text-[10px]">
+                          {idx + 1}
+                        </span>
+                      )}
+                      <span>{layer.name}</span>
+                    </span>
+                  </div>
+
+                  <p className="text-[10.5px] text-zinc-400 leading-tight">{layer.desc}</p>
+
+                  {layer.summary && (
+                    <div className="pt-1 text-[10px] font-bold text-emerald-400 border-t border-zinc-800/60 truncate">
+                      {layer.summary}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Target & Command Input Bar */}
+      <div className="space-y-2">
+        <div className="flex gap-2">
+          {scanExecutionStyle === 'progressive' ? (
+            <div className="relative flex-1">
+              <span className="absolute left-3.5 top-2.5 font-mono font-bold text-sm text-sky-400 select-none">
+                Target:
+              </span>
+              <input
+                type="text"
+                value={targetSubnet}
+                onChange={(e) => setTargetSubnet(e.target.value)}
+                disabled={isRunning}
+                placeholder="10.46.48.0/24, 192.168.1.0/24, or scanme.nmap.org"
+                className="w-full pl-20 pr-4 py-2.5 rounded-xl bg-black border border-zinc-800 font-mono text-xs text-sky-300 placeholder-zinc-600 focus:outline-none focus:border-sky-500 disabled:opacity-60"
+              />
+            </div>
+          ) : (
+            <div className="relative flex-1">
+              <span className="absolute left-3.5 top-2.5 font-mono font-bold text-sm text-rose-400 select-none">
+                $
+              </span>
+              <input
+                type="text"
+                value={customCommand}
+                onChange={(e) => setCustomCommand(e.target.value)}
+                disabled={isRunning}
+                placeholder="nmap -sV -F 10.46.48.0/24"
+                className="w-full pl-8 pr-4 py-2.5 rounded-xl bg-black border border-zinc-800 font-mono text-xs text-rose-300 placeholder-zinc-600 focus:outline-none focus:border-rose-500 disabled:opacity-60"
+              />
+            </div>
+          )}
+
+          {isRunning ? (
+            <button
+              onClick={handleStopScan}
+              className="px-6 py-2.5 rounded-xl bg-rose-700 hover:bg-rose-600 text-white text-xs font-bold shadow transition-colors flex items-center gap-2"
+            >
+              <Square size={14} />
+              <span>Stop Pipeline</span>
+            </button>
+          ) : (
+            <button
+              onClick={handleRun}
+              className={`px-6 py-2.5 rounded-xl text-white text-xs font-bold shadow transition-all flex items-center gap-2 ${
+                scanMode === 'live'
+                  ? 'bg-rose-600 hover:bg-rose-500 shadow-rose-900/40'
+                  : 'bg-sky-600 hover:bg-sky-500 shadow-sky-900/40'
+              }`}
+            >
+              <Play size={14} />
+              <span>{scanExecutionStyle === 'progressive' ? 'Run Layered Pipeline' : 'Run Scan'}</span>
+            </button>
+          )}
         </div>
 
-        {isRunning ? (
+        {/* Quick Presets for Target */}
+        <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+          <span className="text-zinc-500">Quick Targets:</span>
+          {interfaces.map((i) => (
+            <button
+              key={i.name}
+              onClick={() => {
+                setTargetSubnet(i.networkCidr);
+                setCustomCommand(`nmap -sn ${i.networkCidr}`);
+              }}
+              className="px-2 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 text-sky-400 border border-zinc-800 transition-colors"
+            >
+              {i.name} ({i.networkCidr})
+            </button>
+          ))}
           <button
-            onClick={handleStopScan}
-            className="px-5 py-2 rounded-xl bg-rose-700 hover:bg-rose-600 text-white text-xs font-semibold shadow transition-colors flex items-center gap-2"
+            onClick={() => {
+              setTargetSubnet('scanme.nmap.org');
+              setCustomCommand('nmap -sV -F scanme.nmap.org');
+            }}
+            className="px-2 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 text-emerald-400 border border-zinc-800 transition-colors"
           >
-            <Square size={14} />
-            <span>Stop Scan</span>
+            scanme.nmap.org (Testbed)
           </button>
-        ) : (
-          <button
-            onClick={handleRun}
-            className={`px-5 py-2 rounded-xl text-white text-xs font-semibold shadow transition-colors flex items-center gap-2 ${
-              scanMode === 'live'
-                ? 'bg-rose-600 hover:bg-rose-500 shadow-rose-900/40'
-                : 'bg-sky-600 hover:bg-sky-500 shadow-sky-900/40'
-            }`}
-          >
-            <Play size={14} />
-            <span>{scanMode === 'live' ? 'Run Live Scan' : 'Run Simulated Scan'}</span>
-          </button>
-        )}
+        </div>
       </div>
 
       {/* Progress Bar */}
@@ -741,12 +899,41 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
-              Discovered Active Targets ({visibleStreamedHosts.length}
-              {streamedHosts.length > visibleStreamedHosts.length
-                ? ` filtered / ${streamedHosts.length} total`
-                : ''}):
+              Discovered Live Nodes ({visibleStreamedHosts.length}
+              {streamedHosts.length > visibleStreamedHosts.length ? ` / ${streamedHosts.length} total` : ''}):
             </span>
+
+            {/* Filter Tabs */}
+            <div className="flex items-center bg-zinc-900 p-0.5 rounded-lg border border-zinc-800 text-[10.5px] font-mono">
+              <button
+                onClick={() => setStreamFilter('all')}
+                className={`px-2 py-0.5 rounded transition-colors ${
+                  streamFilter === 'all' ? 'bg-sky-600 text-white font-bold' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                All ({streamedHosts.length})
+              </button>
+              <button
+                onClick={() => setStreamFilter('ping_up')}
+                className={`px-2 py-0.5 rounded transition-colors flex items-center gap-1 ${
+                  streamFilter === 'ping_up' ? 'bg-emerald-600 text-white font-bold' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Radio size={9} />
+                <span>Ping Up ({hostsUpCount})</span>
+              </button>
+              <button
+                onClick={() => setStreamFilter('open_ports')}
+                className={`px-2 py-0.5 rounded transition-colors flex items-center gap-1 ${
+                  streamFilter === 'open_ports' ? 'bg-amber-600 text-white font-bold' : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                <Shield size={9} />
+                <span>With Ports ({hostsWithPortsCount})</span>
+              </button>
+            </div>
           </div>
+
           <div className="flex flex-wrap gap-2">
             {visibleStreamedHosts.map((h) => {
               const openPorts = h.ports.filter((p) => p.state === 'open');
@@ -758,7 +945,7 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
                 >
                   <span
                     className={`w-2 h-2 rounded-full ${
-                      isUp ? (openPorts.length > 0 ? 'bg-emerald-400' : 'bg-sky-400') : 'bg-rose-500'
+                      openPorts.length > 0 ? 'bg-emerald-400' : isUp ? 'bg-sky-400' : 'bg-rose-500'
                     }`}
                   />
                   <span className="font-bold text-white">{h.ipv4 || h.id}</span>
@@ -794,8 +981,10 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
                 ? 'text-rose-400'
                 : line.startsWith('[STDERR]')
                 ? 'text-amber-400'
-                : line.includes('✔') || line.includes('Successfully') || line.includes('Complete')
-                ? 'text-emerald-400'
+                : line.includes('✔') || line.includes('Complete') || line.includes('SUCCESSFULLY')
+                ? 'text-emerald-400 font-semibold'
+                : line.startsWith('───')
+                ? 'text-sky-400 font-bold'
                 : 'text-zinc-300'
             }`}
           >
