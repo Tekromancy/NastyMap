@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import type { NmapHost, NmapRun } from 'nastymap';
-import { parseNmapXml, mergeScanResults, ENTERPRISE_NETWORK_XML, GLOBAL_PERIMETER_XML } from 'nastymap';
+import { parseNmapXml, mergeScanResults, generateNetworkScenario, ENTERPRISE_NETWORK_XML, GLOBAL_PERIMETER_XML } from 'nastymap';
 import {
   Play,
   Square,
@@ -499,12 +499,17 @@ export function LiveScanRunner({ onScanCompleted, className = '' }: LiveScanRunn
       `[${new Date().toLocaleTimeString()}] Target: ${targetSubnet}`,
     ]);
 
-    const sourceXml =
-      targetSubnet.includes('global') || targetSubnet.includes('1.1.1.1') || targetSubnet.includes('8.8.8.8')
-        ? GLOBAL_PERIMETER_XML
-        : ENTERPRISE_NETWORK_XML;
-
-    const fullScan = parseNmapXml(sourceXml);
+    let fullScan: NmapRun;
+    if (targetSubnet.includes('global') || targetSubnet.includes('1.1.1.1') || targetSubnet.includes('8.8.8.8')) {
+      fullScan = parseNmapXml(GLOBAL_PERIMETER_XML);
+    } else {
+      const scenario = generateNetworkScenario({
+        subnet: targetSubnet.includes('/') ? targetSubnet : `${targetSubnet}/24`,
+        totalHosts: 22,
+        threatCount: 2,
+      });
+      fullScan = scenario.scan;
+    }
     const totalHosts = fullScan.hosts.length;
 
     const phases = [

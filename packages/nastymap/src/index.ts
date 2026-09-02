@@ -13,3 +13,4 @@ export * from './icons';
 export * from './components';
 export * from './hooks';
 export * from './mutation';
+export * from './simulator/host-generator';

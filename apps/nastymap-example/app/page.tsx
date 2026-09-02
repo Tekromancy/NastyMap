@@ -12,6 +12,7 @@ import {
   HostDetailDrawer,
   parseNmapXml,
   updateHostInScan,
+  generateNetworkScenario,
   SAMPLE_SCANS,
 } from 'nastymap';
 import type { NmapHost, NmapRun, TopologyNode, HostAction, CustomDrawerTab } from 'nastymap';
@@ -276,7 +277,14 @@ export default function Home() {
       }
     : null;
 
-  const handleSelectSample = (sampleKey: 'enterprise' | 'global' | 'breachDiff') => {
+  const handleSelectSample = (sampleKey: 'enterprise' | 'global' | 'breachDiff' | 'randomNetwork') => {
+    if (sampleKey === 'randomNetwork') {
+      const generated = generateNetworkScenario({ totalHosts: 24, threatCount: 2 });
+      setCurrentScan(generated.scan);
+      setActiveScanLabel('Live Subnet (Phones, Laptops & Threats)');
+      setActiveTab('topology');
+      return;
+    }
     const s = SAMPLE_SCANS[sampleKey];
     if (sampleKey === 'breachDiff') {
       setCurrentScan(parseNmapXml(SAMPLE_SCANS.breachDiff.xmlB));
@@ -349,6 +357,13 @@ export default function Home() {
               <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500 font-mono">
                 Sample Scans
               </div>
+              <button
+                onClick={() => handleSelectSample('randomNetwork')}
+                className="w-full text-left px-2.5 py-2 rounded-lg text-xs hover:bg-zinc-900 transition-colors text-emerald-300 flex items-center justify-between"
+              >
+                <span>Live Subnet (Phones/Laptops)</span>
+                <span className="text-[10px] font-mono text-emerald-400 font-bold">Random</span>
+              </button>
               <button
                 onClick={() => handleSelectSample('enterprise')}
                 className="w-full text-left px-2.5 py-2 rounded-lg text-xs hover:bg-zinc-900 transition-colors text-zinc-200 flex items-center justify-between"
