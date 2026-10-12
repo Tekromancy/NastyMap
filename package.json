@@ -7,8 +7,10 @@
   "scripts": {
     "dev": "pnpm --filter nastymap-example dev",
     "game": "pnpm --filter nastymap-game-example dev",
+    "pages:dev": "pnpm --filter githubio dev",
+    "pages:build": "pnpm --filter githubio build",
     "cli": "pnpm --filter nastymap-ink-example start",
-    "build": "pnpm --filter nastymap-example build && pnpm --filter nastymap-game-example build && pnpm --filter nastymap-ink-example build",
+    "build": "pnpm --filter nastymap-example build && pnpm --filter nastymap-game-example build && pnpm --filter githubio build && pnpm --filter nastymap-ink-example build",
     "start": "pnpm --filter nastymap-example start",
     "test": "pnpm --filter nastymap exec vitest run"
   },
