@@ -39,13 +39,14 @@ jobs:
       - name: Build Static Site for GitHub Pages
         run: pnpm --filter githubio build
         env:
-          NEXT_PUBLIC_BASE_PATH: '/nastymap'
+          NEXT_PUBLIC_BASE_PATH: '/NastyMap'
           NODE_ENV: 'production'
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
         with:
           static_site_generator: next
+          base_path: '/NastyMap'
 
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3

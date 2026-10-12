@@ -24,6 +24,17 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark h-full antialiased" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if (window.location.pathname.startsWith('/nastymap')) {
+                window.location.replace(window.location.href.replace('/nastymap', '/NastyMap'));
+              }
+            `,
+          }}
+        />
+      </head>
       <body className="min-h-full flex flex-col bg-[#050811] text-zinc-100" suppressHydrationWarning>
         {children}
       </body>
